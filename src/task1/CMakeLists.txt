@@ -31,6 +31,7 @@ install(PROGRAMS
   scripts/map_goals.py
   scripts/transform_point.py
   scripts/keypoint_follower.py
+  scripts/people_manager.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
