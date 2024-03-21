@@ -17,7 +17,6 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 
-import cv2
 import numpy as np
 
 qos_profile = QoSProfile(
@@ -27,11 +26,13 @@ qos_profile = QoSProfile(
           depth=1)
 
 def goodprint(msg):
-    with open("/dev/pts/3", 'w') as f:
-        print(msg, file=f)
+    try:
+        with open("/dev/pts/3", 'w') as f:
+            print(msg, file=f)
+    except:
+            pass
         
 class MapGoals(Node):
-    """Demonstrating some convertions and loading the map as an image"""
     def __init__(self):
         super().__init__('map_goals')
 
@@ -74,7 +75,7 @@ class MapGoals(Node):
         # checking for left mouse clicks 
         if event == cv2.EVENT_LBUTTONDOWN:
             world_x, world_y = self.map_pixel_to_world(self.clicked_x, self.clicked_y)
-            goodprint(f"\{{x: {world_x}, y: {world_y}\}")
+            goodprint(f"{{x: {world_x}, y: {world_y}}}")
 
             self.get_logger().info(f"Clicked a new point: {x}, {y}.")
             if not self.currently_navigating:
