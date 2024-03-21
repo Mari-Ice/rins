@@ -30,6 +30,7 @@ class detect_faces(Node):
 		])
 
 		marker_topic = "/people_marker"
+		marker_topic2 = "/people_marker2"
 
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value
@@ -41,6 +42,7 @@ class detect_faces(Node):
 		self.pointcloud_sub = self.create_subscription(PointCloud2, "/oakd/rgb/preview/depth/points", self.pointcloud_callback, qos_profile_sensor_data)
 
 		self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
+		self.marker_pub2 = self.create_publisher(Marker, marker_topic2, QoSReliabilityPolicy.BEST_EFFORT)
 
 		self.model = YOLO("yolov8n.pt")
 
@@ -99,7 +101,7 @@ class detect_faces(Node):
 		row_step = data.row_step		
 
 		# iterate over face coordinates
-		for x,y in self.faces:
+		for x,y,z,w in self.faces:
 
 			# get 3-channel representation of the poitn cloud in numpy format
 			a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
@@ -134,7 +136,7 @@ class detect_faces(Node):
 			marker.pose.position.y = float(d[1])
 			marker.pose.position.z = float(d[2])
 
-			self.marker_pub.publish(marker)
+            self.marker_pub2.publish(marker)
 
 def main():
 	print('Face detection node starting.')

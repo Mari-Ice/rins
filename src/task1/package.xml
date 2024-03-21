@@ -7,13 +7,15 @@
   <maintainer email="matej.dobrevski@fri.uni-lj.si">vicos</maintainer>
   <license>Apache-2.0</license>
 
+  <depend>rosidl_default_runtime</depend>
   <depend>rclpy</depend>
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>rosidl_default_generators</depend>
-  <depend>rosidl_default_runtime</depend>
-
+  <depend>geometry_msgs</depend>
+  
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 

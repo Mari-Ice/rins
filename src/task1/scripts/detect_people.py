@@ -20,130 +20,135 @@ from ultralytics import YOLO
 
 class detect_faces(Node):
 
-	def __init__(self):
-		super().__init__('detect_faces')
+    def __init__(self):
+        super().__init__('detect_faces')
 
-		self.declare_parameters(
-			namespace='',
-			parameters=[
-				('device', ''),
-		])
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('device', ''),
+        ])
 
-		marker_topic = "/people_marker"
 
-		self.detection_color = (0,0,255)
-		self.device = self.get_parameter('device').get_parameter_value().string_value
+        self.detection_color = (0,0,255)
+        self.device = self.get_parameter('device').get_parameter_value().string_value
 
-		self.bridge = CvBridge()
-		self.scan = None
+        self.bridge = CvBridge()
+        self.scan = None
 
-		self.rgb_image_sub = self.create_subscription(Image, "/oakd/rgb/preview/image_raw", self.rgb_callback, qos_profile_sensor_data)
-		self.pointcloud_sub = self.create_subscription(PointCloud2, "/oakd/rgb/preview/depth/points", self.pointcloud_callback, qos_profile_sensor_data)
+        self.rgb_image_sub = self.create_subscription(Image, "/oakd/rgb/preview/image_raw", self.rgb_callback, qos_profile_sensor_data)
+        self.pointcloud_sub = self.create_subscription(PointCloud2, "/oakd/rgb/preview/depth/points", self.pointcloud_callback, qos_profile_sensor_data)
 
-		self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
+        marker_topic = "/people_marker"
+        self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
+        
+        marker_topic1 = "/people_marker1"
+        self.marker_pub1 = self.create_publisher(Marker, marker_topic1, QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.model = YOLO("yolov8n.pt")
+        self.model = YOLO("yolov8n.pt")
 
-		self.faces = []
+        self.faces = []
 
-		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
+        self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
 
-	def rgb_callback(self, data):
+    def rgb_callback(self, data):
 
-		self.faces = []
+        self.faces = []
 
-		try:
-			cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
 
-			self.get_logger().info(f"Running inference on image...")
+            self.get_logger().info(f"Running inference on image...")
 
-			# run inference
-			res = self.model.predict(cv_image, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
+            # run inference
+            res = self.model.predict(cv_image, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
 
-			# iterate over results
-			for x in res:
-				bbox = x.boxes.xyxy
-				if bbox.nelement() == 0: # skip if empty
-					continue
+            # iterate over results
+            for x in res:
+                bbox = x.boxes.xyxy
+                if bbox.nelement() == 0: # skip if empty
+                    continue
 
-				self.get_logger().info(f"Person has been detected!")
+                self.get_logger().info(f"Person has been detected!")
 
-				bbox = bbox[0]
+                bbox = bbox[0]
 
-				# draw rectangle
-				cv_image = cv2.rectangle(cv_image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), self.detection_color, 3)
+                # draw rectangle
+                cv_image = cv2.rectangle(cv_image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), self.detection_color, 3)
+                self.faces.append((int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])))
 
-				cx = int((bbox[0]+bbox[2])/2)
-				cy = int((bbox[1]+bbox[3])/2)
+            cv2.imshow("image", cv_image)
+            key = cv2.waitKey(1)
+            if key==27:
+                print("exiting")
+                exit()
+            
+        except CvBridgeError as e:
+            print(e)
 
-				# draw the center of bounding box
-				cv_image = cv2.circle(cv_image, (cx,cy), 5, self.detection_color, -1)
+    def pointcloud_callback(self, data):
 
-				self.faces.append((cx,cy))
+        # get point cloud attributes
+        height = data.height
+        width = data.width
+        point_step = data.point_step
+        row_step = data.row_step        
 
-			cv2.imshow("image", cv_image)
-			key = cv2.waitKey(1)
-			if key==27:
-				print("exiting")
-				exit()
-			
-		except CvBridgeError as e:
-			print(e)
+        # iterate over face coordinates
+        for x,y,z,w in self.faces:
 
-	def pointcloud_callback(self, data):
+            # get 3-channel representation of the poitn cloud in numpy format
+            a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
+            a = a.reshape((height,width,3))
 
-		# get point cloud attributes
-		height = data.height
-		width = data.width
-		point_step = data.point_step
-		row_step = data.row_step		
+            # read center coordinates
+            d1 = a[y,x,:]
+            d2 = a[w,z,:]
 
-		# iterate over face coordinates
-		for x,y in self.faces:
+            # create marker
+            marker = Marker()
 
-			# get 3-channel representation of the poitn cloud in numpy format
-			a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
-			a = a.reshape((height,width,3))
+            marker.header.frame_id = "/base_link"
+            marker.header.stamp = data.header.stamp
 
-			# read center coordinates
-			d = a[y,x,:]
+            marker.type = 2
+            marker.id = 0
 
-			# create marker
-			marker = Marker()
+            # Set the scale of the marker
+            scale = 0.1
+            marker.scale.x = scale
+            marker.scale.y = scale
+            marker.scale.z = scale
 
-			marker.header.frame_id = "/base_link"
-			marker.header.stamp = data.header.stamp
+            # Set the color
+            marker.color.r = 1.0
+            marker.color.g = 1.0
+            marker.color.b = 1.0
+            marker.color.a = 1.0
 
-			marker.type = 2
-			marker.id = 0
 
-			# Set the scale of the marker
-			scale = 0.1
-			marker.scale.x = scale
-			marker.scale.y = scale
-			marker.scale.z = scale
+            # Set the pose of the marker
+            marker.pose.position.x = float(d1[0])
+            marker.pose.position.y = float(d1[1])
+            marker.pose.position.z = float(d1[2])
+    
+            self.marker_pub.publish(marker)
+            
+            # Set the pose of the marker
+            marker.pose.position.x = float(d2[0])
+            marker.pose.position.y = float(d2[1])
+            marker.pose.position.z = float(d2[2])
 
-			# Set the color
-			marker.color.r = 1.0
-			marker.color.g = 1.0
-			marker.color.b = 1.0
-			marker.color.a = 1.0
-
-			# Set the pose of the marker
-			marker.pose.position.x = float(d[0])
-			marker.pose.position.y = float(d[1])
-			marker.pose.position.z = float(d[2])
-
-			self.marker_pub.publish(marker)
+            self.marker_pub1.publish(marker)
 
 def main():
-	print('Face detection node starting.')
+    print('Face detection node starting.')
 
-	rclpy.init(args=None)
-	node = detect_faces()
-	rclpy.spin(node)
-	node.destroy_node()
-	rclpy.shutdown()
+    rclpy.init(args=None)
+    node = detect_faces()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
-	main()
+    main()
