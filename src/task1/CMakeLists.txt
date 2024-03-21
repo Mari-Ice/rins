@@ -30,6 +30,7 @@ install(DIRECTORY
 install(PROGRAMS
   scripts/map_goals.py
   scripts/transform_point.py
+  scripts/keypoint_follower.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
