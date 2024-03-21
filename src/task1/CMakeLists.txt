@@ -21,10 +21,10 @@ find_package(nav2_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/FaceNormal.msg"
-  DEPENDENCIES geometry_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
-)
+# rosidl_generate_interfaces(${PROJECT_NAME}
+#   "msg/FaceNormal.msg"
+#   DEPENDENCIES geometry_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
+# )
 
 install(DIRECTORY
   launch
