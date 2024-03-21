@@ -1,0 +1,4 @@
+Invoking command in '/home/theta/colcon_ws/build/dis_tutorial4': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/theta/colcon_ws/build/dis_tutorial4 -- -j16 -l16
+Invoked command in '/home/theta/colcon_ws/build/dis_tutorial4' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/theta/colcon_ws/build/dis_tutorial4 -- -j16 -l16
+Invoking command in '/home/theta/colcon_ws/build/dis_tutorial4': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/theta/colcon_ws/build/dis_tutorial4
+Invoked command in '/home/theta/colcon_ws/build/dis_tutorial4' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/theta/colcon_ws/build/dis_tutorial4
