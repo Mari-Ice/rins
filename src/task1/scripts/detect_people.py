@@ -16,6 +16,7 @@ import numpy as np
 from geometry_msgs.msg import Point
 
 from ultralytics import YOLO
+import sys
 
 #from task1.msg import FaceNormal
 
@@ -45,6 +46,12 @@ class detect_faces(Node):
 
         marker_topic = "/people_marker"
         self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
+
+        marker_topic1 = "/img1"
+        self.marker_pub1 = self.create_publisher(Marker, marker_topic1, QoSReliabilityPolicy.BEST_EFFORT)
+        marker_topic2 = "/img2"
+        self.marker_pub2 = self.create_publisher(Marker, marker_topic2, QoSReliabilityPolicy.BEST_EFFORT)
+
 
         self.model = YOLO("yolov8n.pt")
 
@@ -76,7 +83,7 @@ class detect_faces(Node):
 
                 # draw rectangle
                 cv_image = cv2.rectangle(cv_image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), self.detection_color, 3)
-                self.faces.append((int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])))
+                self.faces.append((int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))) #Probaj uredit vrstni red, ce nic druga ne dela
 
             cv2.imshow("image", cv_image)
             key = cv2.waitKey(1)
@@ -97,62 +104,100 @@ class detect_faces(Node):
 
         # iterate over face coordinates
         for x,y,z,w in self.faces:
+            if(abs(x-z) < 15 or abs(y-w) < 15):
+                continue
 
-            # get 3-channel representation of the poitn cloud in numpy format
-            a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
-            a = a.reshape((height,width,3))
-
-            # read center coordinates
-            d1 = a[y,x,:]
-            d2 = a[w,z,:]
+            try:
+                # get 3-channel representation of the poitn cloud in numpy format
+                a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
+                a = a.reshape((height,width,3))
            
-            origin = 0.5 * (np.array(d1).astype(float) +  np.array(d2).astype(float))
-            vector_up = np.array([0,0,1])
-            vector_right = np.array(d1).astype(float) -  np.array(d2).astype(float)
-            vector_fwd = np.cross(vector_up, vector_right)
+                d1 = a[y,x,:]
+                d2 = a[w,z,:]
+         
+                marker = Marker()
+
+                marker.header.frame_id = "/base_link"
+                marker.header.stamp = data.header.stamp
+
+                marker.type = 2
+                marker.id = 0
+
+                # Set the scale of the marker
+                scale = 0.1
+                marker.scale.x = scale
+                marker.scale.y = scale
+                marker.scale.z = scale
+
+                # Set the color
+                marker.color.r = 1.0
+                marker.color.g = 1.0
+                marker.color.b = 1.0
+                marker.color.a = 1.0
+
+                # Set the pose of the marker
+                marker.pose.position.x = float(d1[0])
+                marker.pose.position.y = float(d1[1])
+                marker.pose.position.z = float(d1[2])
+
+                self.marker_pub1.publish(marker)
+                
+                # Set the pose of the marker
+                marker.pose.position.x = float(d2[0])
+                marker.pose.position.y = float(d2[1])
+                marker.pose.position.z = float(d2[2])
+
+                self.marker_pub2.publish(marker)
+
+                origin = 0.5 * (np.array(d1).astype(float) +  np.array(d2).astype(float))
+                vector_up = np.array([0,0,1])
+                vector_right = np.array(d1).astype(float) -  np.array(d2).astype(float)
+                vector_fwd = np.cross(vector_up, vector_right)
       
-            fwd_len = np.linalg.norm(vector_fwd)
-            if fwd_len == 0:
-                return
-            vector_fwd = vector_fwd / fwd_len
+                fwd_len = np.linalg.norm(vector_fwd)
+                if fwd_len == 0:
+                    return
+                vector_fwd = vector_fwd / fwd_len
 
 
-            # create marker
-            marker = Marker()
+                # create marker
+                marker = Marker()
 
-            marker.header.frame_id = "/base_link"
-            marker.header.stamp = data.header.stamp
+                marker.header.frame_id = "/base_link"
+                marker.header.stamp = data.header.stamp
 
-            marker.type = 0
-            marker.id = 0
+                marker.type = 0
+                marker.id = 0
 
-            # Set the scale of the marker
-            scale = 0.1
-            marker.scale.x = scale
-            marker.scale.y = scale
-            marker.scale.z = scale
+                # Set the scale of the marker
+                scale = 0.1
+                marker.scale.x = scale
+                marker.scale.y = scale
+                marker.scale.z = scale
 
-            # Set the color
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
+                # Set the color
+                marker.color.r = 1.0
+                marker.color.g = 0.0
+                marker.color.b = 0.0
+                marker.color.a = 1.0
 
-            startpoint = Point()
-            startpoint.x = origin[0]
-            startpoint.y = origin[1]
-            startpoint.z = origin[2]
+                startpoint = Point()
+                startpoint.x = origin[0]
+                startpoint.y = origin[1]
+                startpoint.z = origin[2]
 
-            endpoint = Point()
+                endpoint = Point()
 
-            endpoint.x = origin[0] + vector_fwd[0]
-            endpoint.y = origin[1] + vector_fwd[1]
-            endpoint.z = origin[2] + vector_fwd[2]
+                endpoint.x = origin[0] + vector_fwd[0]
+                endpoint.y = origin[1] + vector_fwd[1]
+                endpoint.z = origin[2] + vector_fwd[2]
 
-            marker.points.append(startpoint)
-            marker.points.append(endpoint)
+                marker.points.append(startpoint)
+                marker.points.append(endpoint)
 
-            self.marker_pub.publish(marker)
+                self.marker_pub.publish(marker)
+            except:
+                pass
 
 def main():
     print('Face detection node starting.')

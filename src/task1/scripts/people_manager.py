@@ -13,26 +13,35 @@ from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import numpy as np
 import math
-
+from geometry_msgs.msg import Point
 
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
 
+
+
 class Face():
     def __init__(self, marker):
-        self.x = marker.pose.position.x
-        self.y = marker.pose.position.y
-        self.z = marker.pose.position.z
+        
+        self.origin = np.array([
+            marker.points[0].x,
+            marker.points[0].y,
+            marker.points[0].z
+        ])
+        self.normal = np.array([
+            marker.points[1].x - marker.points[0].x,
+            marker.points[1].y - marker.points[0].y,
+            marker.points[1].z - marker.points[0].z
+        ])
 
-        self.tresh_xy = 0.1
-        self.tresh_z = 0.02
+        self.tresh = 0.2
 
         self.num = 1
+        self.num_tresh = 100
+        self.visited = False
 
     def compare(self, face):
-        if(math.fabs(self.x - face.x) < self.tresh_xy and math.fabs(self.y - face.y) < self.tresh_xy and math.fabs(self.z - face.z) < self.tresh_z):
-            return True
-        return False
+        return np.linalg.norm(self.origin - face.origin) < self.tresh and np.dot(self.normal, face.normal) > 0.8
 
 
 class detect_faces(Node):
@@ -51,24 +60,38 @@ class detect_faces(Node):
         marker_topic = "/people_marker"
 
         self.marker = self.create_subscription(Marker, marker_topic, self.marker_callback, 10)
+        self.publisher = self.create_publisher(Point, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
+        
         self.get_logger().info(f"Node has been initialized! Reading from {marker_topic}.")
+
+
 
     def marker_callback(self, marker):
         new_face = Face(marker)
         notFound = True
         for face in self.faces:
             if(face.compare(new_face)):
-                face.x = (face.x + new_face.x) / 2
-                face.y = (face.y + new_face.y) / 2
-                face.z = (face.z + new_face.z) / 2 
+                face.origin = 0.9 * face.origin + 0.1 * new_face.origin
+                face.normal = 0.9 * face.normal + 0.1 * new_face.normal
                 face.num += 1
                 notFound = False
+                if(not face.visited):
+                    if(face.num > face.num_tresh):
+                        point = Point()
+                        point.x = face.origin[0] + face.normal[0]
+                        point.y = face.origin[1] + face.normal[1]
+                        point.z = face.origin[2] + face.normal[2]
+                        self.publisher.publish(point)
+                        face.visited = True
                 break
         if(notFound):
             self.faces.append(new_face)
         
         self.get_logger().info(f"Got a marker {marker.pose.position.x} {marker.pose.position.y} {marker.pose.position.z}")
         self.get_logger().info(f"FACES: {len(self.faces)}")
+
+
+
 
 def main():
     print('People manager node starting.')
