@@ -37,6 +37,7 @@ install(PROGRAMS
   scripts/keypoint_follower.py
   scripts/people_manager.py
   scripts/detect_people.py
+  scripts/talker.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_export_dependencies(${dependencies} rosidl_default_runtime)
