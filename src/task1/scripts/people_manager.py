@@ -34,14 +34,15 @@ class Face():
             marker.points[1].z - marker.points[0].z
         ])
 
-        self.tresh = 0.2
+        self.tresh = 0.5
 
         self.num = 1
         self.num_tresh = 100
         self.visited = False
 
     def compare(self, face):
-        return np.linalg.norm(self.origin - face.origin) < self.tresh and np.dot(self.normal, face.normal) > 0.8
+        print(f"!!!!!! diff: {np.linalg.norm(self.origin - face.origin)} normals: {np.dot(self.normal, face.normal)}")
+        return np.linalg.norm(self.origin - face.origin) < self.tresh and np.dot(self.normal, face.normal) > 0.7
 
 
 class detect_faces(Node):
@@ -60,7 +61,7 @@ class detect_faces(Node):
         marker_topic = "/people_marker"
 
         self.marker = self.create_subscription(Marker, marker_topic, self.marker_callback, 10)
-        self.publisher = self.create_publisher(Point, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
+        self.publisher = self.create_publisher(Marker, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
         
         self.get_logger().info(f"Node has been initialized! Reading from {marker_topic}.")
 
@@ -68,6 +69,8 @@ class detect_faces(Node):
 
     def marker_callback(self, marker):
         new_face = Face(marker)
+        if not (np.isfinite(new_face.origin).all() and np.isfinite(new_face.normal).all()):
+            return
         notFound = True
         for face in self.faces:
             if(face.compare(new_face)):
@@ -77,17 +80,28 @@ class detect_faces(Node):
                 notFound = False
                 if(not face.visited):
                     if(face.num > face.num_tresh):
-                        point = Point()
-                        point.x = face.origin[0] + face.normal[0]
-                        point.y = face.origin[1] + face.normal[1]
-                        point.z = face.origin[2] + face.normal[2]
+                        point = Marker()
+                        point.type = 2
+                        point.header.frame_id = "/base_link"
+                        point.header.stamp = marker.header.stamp
+                        scale = 0.1
+                        point.scale.x = scale
+                        point.scale.y = scale
+                        point.scale.z = scale
+                        point.color.r = 1.0
+                        point.color.g = 1.0
+                        point.color.b = 1.0
+                        point.color.a = 1.0
+                        point.pose.position.x = face.origin[0] + face.normal[0]
+                        point.pose.position.y = face.origin[1] + face.normal[1]
+                        point.pose.position.z = face.origin[2] + face.normal[2]
                         self.publisher.publish(point)
                         face.visited = True
                 break
         if(notFound):
             self.faces.append(new_face)
         
-        self.get_logger().info(f"Got a marker {marker.pose.position.x} {marker.pose.position.y} {marker.pose.position.z}")
+        self.get_logger().info(f"Got a marker {marker.points[0]} {marker.points[1]}")
         self.get_logger().info(f"FACES: {len(self.faces)}")
 
 
