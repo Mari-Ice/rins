@@ -3,6 +3,13 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSReliabilityPolicy
+from rclpy.duration import Duration
+
+from geometry_msgs.msg import PointStamped
+import tf2_geometry_msgs as tfg
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
@@ -56,6 +63,10 @@ class detect_faces(Node):
 		marker_topic2 = "/img2"
 		self.marker_pub2 = self.create_publisher(Marker, marker_topic2, QoSReliabilityPolicy.BEST_EFFORT)
 
+
+		# For listening and loading the TF
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 
 		self.model = YOLO("yolov8n.pt")
 
@@ -125,13 +136,46 @@ class detect_faces(Node):
 
 			d1 = a[y,x]
 			d2 = a[y,z]
-		
+
+			p1 = PointStamped()
+			p1.header.frame_id = "/oakd_link"
+			p1.header.stamp = self.get_clock().now().to_msg()
+			p1.point.x = float(d1[0])
+			p1.point.y = float(d1[1])
+			p1.point.z = float(d1[2])
+
+			p2 = PointStamped()
+			p2.header.frame_id = "/oakd_link"
+			p2.header.stamp = self.get_clock().now().to_msg()
+			p2.point.x = float(d2[0])
+			p2.point.y = float(d2[1])
+			p2.point.z = float(d2[2])
+
 			if(np.linalg.norm(d2-d1) > 0.5):
 				continue
 
+			#zdej pa te tocke transformiramo v globalne (map) koordinate
+			time_now = rclpy.time.Time()
+			timeout = Duration(seconds=1.0)
+			trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)	
+
+			p1 = tfg.do_transform_point(p1, trans)
+			p2 = tfg.do_transform_point(p2, trans)
+
+			d1 = np.array([
+				p1.point.x,
+				p1.point.y,
+				p1.point.z
+			]);
+			d2 = np.array([
+				p2.point.x,
+				p2.point.y,
+				p2.point.z
+			]);
+
 			marker = Marker()
 
-			marker.header.frame_id = "/oakd_link"
+			marker.header.frame_id = "/map"
 			marker.header.stamp = data.header.stamp
 
 			marker.type = 2
@@ -174,21 +218,14 @@ class detect_faces(Node):
 			vector_fwd = np.cross(vector_up, vector_right)
 	  
 			fwd_len = np.linalg.norm(vector_fwd)
-			if fwd_len == 0:
+			if fwd_len <= 0.02:
 				return
 			vector_fwd = vector_fwd / fwd_len
-
-
-			#Izracunali bi lahko kvaliteto zaznave kot
-				#ugotovimo koliko je robot pravokoten na steno
-				#sirina slike
-			#Za to bi rabo subsicribat na /odom in vzeti orientation .z
-			#fajn bi blo svoj tip sporocila napisat, da lahko dodamo se kake podatke, ...
 
 			# create marker
 			marker = Marker()
 
-			marker.header.frame_id = "/oakd_link"
+			marker.header.frame_id = "/map"
 			marker.header.stamp = data.header.stamp
 
 			marker.type = 0

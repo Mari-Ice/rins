@@ -51,20 +51,9 @@ class Face():
 		self.visited = False
 
 	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
-		
 		kp1 = self.origin + 0.3 * self.normal
 		kp2 = face.origin + 0.3 * face.normal
-		
 		return mag(kp1-kp2) < 0.5
-
-		#known_face_origin = np.copy(self.origin)
-		#known_face_origin[2] = 0
-
-		#new_face_origin = np.copy(face.origin)
-		#new_face_origin[2] = 0
-
-		#print(f"id: {self.id} diff: {np.linalg.norm(self.origin - face.origin)} normals: {np.dot(self.normal, face.normal)}")
-		#return np.linalg.norm(known_face_origin - new_face_origin) < Face.tresh_xy and np.dot(self.normal, face.normal) > Face.tresh_cos
 
 
 class detect_faces(Node):
@@ -104,32 +93,31 @@ class detect_faces(Node):
 		for face in self.faces:
 			if(face.compare(new_face)): #naceloma bi blo boljse, ce bi sli cez vse in poiskai tistega, ki najbolj ustreza, 
 										#ce so meje nastavljene prevec nenatancno, se zgodi, da ustreza vecim obrazom ...
-
 				#face.origin = 0.9 * face.origin + 0.1 * new_face.origin
                 #face.normal = 0.8 * face.normal + 0.2 * new_face.normal Tu je treba se normirat, ker taksan vsota ne ohrani razdalje...
 				face.num += 1
 				notFound = False
 				if(not face.visited):
-					if(face.num > face.num_tresh):
-						point = Marker()
-						point.type = 2
-						point.id = face.id
-						point.header.frame_id = "/oakd_link"
-						point.header.stamp = marker.header.stamp
-						
-						point.scale.x = 0.15
-						point.scale.y = 0.15
-						point.scale.z = 0.15
+					#if(face.num > face.num_tresh):
+					point = Marker()
+					point.type = 2
+					point.id = face.id
+					point.header.frame_id = "/map"
+					point.header.stamp = marker.header.stamp
+					
+					point.scale.x = 0.15
+					point.scale.y = 0.15
+					point.scale.z = 0.15
 
-						point.color.r = 0.0
-						point.color.g = 1.0
-						point.color.b = 0.0
-						point.color.a = 1.0
-						point.pose.position.x = face.origin[0] + face.normal[0] * 0.3
-						point.pose.position.y = face.origin[1] + face.normal[1] * 0.3
-						point.pose.position.z = face.origin[2] + face.normal[2] * 0.3
-						self.publisher.publish(point)
-						face.visited = True
+					point.color.r = 0.0
+					point.color.g = 1.0
+					point.color.b = 0.0
+					point.color.a = 1.0
+					point.pose.position.x = face.origin[0] + face.normal[0] * 0.3
+					point.pose.position.y = face.origin[1] + face.normal[1] * 0.3
+					point.pose.position.z = face.origin[2] + face.normal[2] * 0.3
+					self.publisher.publish(point)
+					face.visited = True
 				break 
 		if(notFound):
 			self.faces.append(new_face)
