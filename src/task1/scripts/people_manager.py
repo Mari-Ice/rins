@@ -54,8 +54,8 @@ class Face():
 		self.visited = False
 
 	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
-		kp1 = self.origin + 0.3 * self.normal
-		kp2 = face.origin + 0.3 * face.normal
+		kp1 = self.origin + 0.4 * self.normal
+		kp2 = face.origin + 0.4 * face.normal
 		return mag(kp1-kp2) < 0.5
 
 

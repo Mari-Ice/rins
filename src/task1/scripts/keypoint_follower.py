@@ -8,10 +8,12 @@ from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import Quaternion, PoseStamped
-from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
+
 from visualization_msgs.msg import Marker
 
-# from tf_transformations import quaternion_from_euler
+from tf_transformations import quaternion_from_euler, euler_from_quaternion
+
+from std_srvs.srv import Trigger
 
 #import tf_transformations
 
@@ -20,6 +22,8 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 
 import numpy as np
+
+STOP_AFTER_THREE = True
 
 qos_profile = QoSProfile(
           durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -54,7 +58,10 @@ class MapGoals(Node):
             [ -1.5599999910593034,  1.2000000566244124    , 0], 
             [ -0.20999997094273581, -0.049999962002039045 , 0]
         ]
+        self.face_keypoints = []
         self.keypoint_index = 0
+
+        self.future = None
 
         # Basic ROS stuff
         timer_frequency = 10
@@ -65,6 +72,7 @@ class MapGoals(Node):
         self.pending_goal = True
         self.result_future = None
         self.currently_navigating = False
+        self.currently_greeting = False
         self.clicked_x = None
         self.clicked_y = None
         self.ros_occupancy_grid = None
@@ -74,22 +82,39 @@ class MapGoals(Node):
                          "width":None,
                          "height":None,
                          "origin":None} # origin will be in the format [x,y,theta]
-
+        self.face_count = 0
         # Subscribe to map, and create an action client for sending goals
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
         # Create a timer, to do the main work.
         self.timer = self.create_timer(timer_period, self.timer_callback)
+
+        self.client = self.create_client(Trigger, '/say_hello')
     
     def get_next_keypoint(self):
+        if(len(self.face_keypoints) > 0):
+            self.currently_greeting = True
+            return self.face_keypoints.pop(0)
         new_index = min(self.keypoint_index, len(self.keypoints))
         self.keypoint_index += 1
+        if self.keypoint_index >= len(self.keypoints):
+            self.keypoint_index = 0
         return self.keypoints[new_index]
 
     def timer_callback(self):
+        if STOP_AFTER_THREE and self.face_count >= 3:
+            rclpy.shutdown()
+            exit(0)
+
+        if self.future and self.future.done():
+            result = self.future.result()
+            self.get_logger().info(f"greeting result: {result}")
+            self.currently_greeting = False
+            self.future = None
+            self.face_count += 1
         
         # If the robot is not currently navigating to a goal, and there is a goal pending
-        if not self.currently_navigating and self.pending_goal:
+        if not self.currently_navigating and self.pending_goal and not self.currently_greeting:
             #world_x, world_y = self.map_pixel_to_world(self.clicked_x, self.clicked_y)
 
             world_x, world_y, orientation = self.get_next_keypoint()
@@ -158,6 +183,7 @@ class MapGoals(Node):
 
         if not goal_handle.accepted:
             self.get_logger().error('Goal was rejected!')
+            self.currently_greeting = False
             return    
 
         self.currently_navigating = True
@@ -166,6 +192,9 @@ class MapGoals(Node):
         self.result_future.add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
+        if(self.currently_greeting):
+            self.greet()
+
         self.currently_navigating = False
         self.pending_goal = False
         status = future.result().status
@@ -178,6 +207,11 @@ class MapGoals(Node):
         
         #Okej, tu bi mogo preverit ali si ze prisu do konca, in ce si potem ne nastavis pending goal na True.
         self.pending_goal = True
+
+    def greet(self):
+        req = Trigger.Request()
+        self.future = self.client.call_async(req)
+
 
     def yaw_to_quaternion(self, angle_z = 0.):
         quat_tf = quaternion_from_euler(0, 0, angle_z)
@@ -192,7 +226,12 @@ class MapGoals(Node):
         return rot
 
     def add_face(self, marker):
-        self.keypoints.insert(self.keypoint_index, [marker.pose.position.x, marker.pose.position.y, marker.pose.orientation.x])
+        x = marker.pose.orientation.x
+        y = marker.pose.orientation.y
+        z = marker.pose.orientation.z
+        w = marker.pose.orientation.w
+        _, _, theta = euler_from_quaternion((x, y, z, w))
+        self.face_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
 
 def main():
     rclpy.init(args=None)

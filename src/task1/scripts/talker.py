@@ -34,8 +34,8 @@ class Talker(Node):
         except Exception as e:
             response.success = False
             response.message = str(e)
-            
-        return response
+        finally:
+            return response
     
 def main(args=None):
     print('Talker node starting.')
