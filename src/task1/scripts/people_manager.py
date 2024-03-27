@@ -17,7 +17,8 @@ from geometry_msgs.msg import Point
 from collections import deque
 import time
 
-import tf_transformations
+# import tf_transformations
+from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
@@ -121,7 +122,7 @@ class detect_faces(Node):
 
 					# marker should be turned towards the face (opposite from the normal)
 					marker_normal = -face.normal
-					q = tf_transformations.quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
+					q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
 					point.pose.orientation.x = q[0]
 					point.pose.orientation.y = q[1]
 					point.pose.orientation.z = q[2]
