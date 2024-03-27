@@ -23,7 +23,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 import numpy as np
 
-STOP_AFTER_THREE = True
+STOP_AFTER_THREE = False
 
 qos_profile = QoSProfile(
           durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -95,9 +95,10 @@ class MapGoals(Node):
         if(len(self.face_keypoints) > 0):
             self.currently_greeting = True
             return self.face_keypoints.pop(0)
-        new_index = min(self.keypoint_index, len(self.keypoints))
+        new_index = min(self.keypoint_index, len(self.keypoints)-1)
         self.keypoint_index += 1
-        if self.keypoint_index >= len(self.keypoints):
+
+        if self.keypoint_index >= len(self.keypoints): #okej, naceloma kr pametna ideja, ce nismo nasli dovolj obrazov, gremo se en krog...
             self.keypoint_index = 0
         return self.keypoints[new_index]
 
@@ -211,7 +212,6 @@ class MapGoals(Node):
     def greet(self):
         req = Trigger.Request()
         self.future = self.client.call_async(req)
-
 
     def yaw_to_quaternion(self, angle_z = 0.):
         quat_tf = quaternion_from_euler(0, 0, angle_z)

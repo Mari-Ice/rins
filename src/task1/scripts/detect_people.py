@@ -26,7 +26,6 @@ from ultralytics import YOLO
 import sys
 
 #from task1.msg import FaceNormal
-
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
 
@@ -86,7 +85,7 @@ class detect_faces(Node):
 			# run inference
 			res = self.model.predict(cv_image, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
 
-			# iterate over results
+			# iterate over results 
 			for x in res:
 				bbox = x.boxes.xyxy
 				if bbox.nelement() == 0: # skip if empty
@@ -119,7 +118,7 @@ class detect_faces(Node):
 
 		# print(f"pointcloud size: {width} x {height}")
 
-		# iterate over face coordinates
+		# Gremo cez vse face, ki smo jih zaznali v zadnjem frame-u
 		for x,y,z in self.faces:
 			x = clamp(x, 0, width-1)
 			z = clamp(z, 0, width-1)
