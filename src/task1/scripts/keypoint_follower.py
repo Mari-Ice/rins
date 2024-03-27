@@ -9,9 +9,11 @@ from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import Quaternion, PoseStamped
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
+from visualization_msgs.msg import Marker
+
 # from tf_transformations import quaternion_from_euler
 
-import tf_transformations
+#import tf_transformations
 
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
@@ -37,20 +39,20 @@ class MapGoals(Node):
         super().__init__('map_goals')
 
         self.keypoints = [
-            [ -1.7599999940395357,  -0.7499999724328519   ], 
-            [ -0.2599999716877939,  -1.8499999888241292   ], 
-            [ 2.240000065565109,    -1.4999999836087228   ], 
-            [ 3.5900000856816767,   -1.3499999813735486   ], 
-            [ 1.7400000581145285,   -0.049999962002039045 ], 
-            [ 0.9400000461935996,   -0.3499999664723874   ], 
-            [ 0.9400000461935996,   2.0000000685453414    ], 
-            [ 2.4400000685453413,   2.0000000685453414    ], 
-            [ 2.3400000670552252,   2.3000000730156898    ], 
-            [ 1.4400000536441802,   3.450000090152025     ], 
-            [ -1.6599999925494195,  3.1500000856816768    ], 
-            [ -1.5099999903142454,  4.750000109523535     ], 
-            [ -1.5599999910593034,  1.2000000566244124    ], 
-            [ -0.20999997094273581, -0.049999962002039045 ]
+            [ -1.7599999940395357,  -0.7499999724328519   , 0], 
+            [ -0.2599999716877939,  -1.8499999888241292   , 0], 
+            [ 2.240000065565109,    -1.4999999836087228   , 0], 
+            [ 3.5900000856816767,   -1.3499999813735486   , 0], 
+            [ 1.7400000581145285,   -0.049999962002039045 , 0], 
+            [ 0.9400000461935996,   -0.3499999664723874   , 0], 
+            [ 0.9400000461935996,   2.0000000685453414    , 0], 
+            [ 2.4400000685453413,   2.0000000685453414    , 0], 
+            [ 2.3400000670552252,   2.3000000730156898    , 0], 
+            [ 1.4400000536441802,   3.450000090152025     , 0], 
+            [ -1.6599999925494195,  3.1500000856816768    , 0], 
+            [ -1.5099999903142454,  4.750000109523535     , 0], 
+            [ -1.5599999910593034,  1.2000000566244124    , 0], 
+            [ -0.20999997094273581, -0.049999962002039045 , 0]
         ]
         self.keypoint_index = 0
 
@@ -75,7 +77,7 @@ class MapGoals(Node):
 
         # Subscribe to map, and create an action client for sending goals
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-
+        self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
         # Create a timer, to do the main work.
         self.timer = self.create_timer(timer_period, self.timer_callback)
     
@@ -90,10 +92,9 @@ class MapGoals(Node):
         if not self.currently_navigating and self.pending_goal:
             #world_x, world_y = self.map_pixel_to_world(self.clicked_x, self.clicked_y)
 
-            world_x, world_y = self.get_next_keypoint()
+            world_x, world_y, orientation = self.get_next_keypoint()
 
-            world_orientation = 0.
-            goal_pose = self.generate_goal_message(world_x, world_y, world_orientation)
+            goal_pose = self.generate_goal_message(world_x, world_y, orientation)
             self.go_to_pose(goal_pose)
 
     def generate_goal_message(self, x, y, theta=0.2):
@@ -189,6 +190,9 @@ class MapGoals(Node):
         rot = np.array([[c, -s],
                         [s , c]])
         return rot
+
+    def add_face(self, marker):
+        self.keypoints.insert(self.keypoint_index, [marker.pose.position.x, marker.pose.position.y, marker.pose.orientation.x])
 
 def main():
     rclpy.init(args=None)
