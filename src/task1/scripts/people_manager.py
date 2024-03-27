@@ -17,6 +17,8 @@ from geometry_msgs.msg import Point
 from collections import deque
 import time
 
+import tf_transformations
+
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
 
@@ -116,6 +118,15 @@ class detect_faces(Node):
 					point.pose.position.x = face.origin[0] + face.normal[0] * 0.3
 					point.pose.position.y = face.origin[1] + face.normal[1] * 0.3
 					point.pose.position.z = face.origin[2] + face.normal[2] * 0.3
+
+					# marker should be turned towards the face (opposite from the normal)
+					marker_normal = -face.normal
+					q = tf_transformations.quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
+					point.pose.orientation.x = q[0]
+					point.pose.orientation.y = q[1]
+					point.pose.orientation.z = q[2]
+					point.pose.orientation.w = q[3]
+
 					self.publisher.publish(point)
 					face.visited = True
 				break 
