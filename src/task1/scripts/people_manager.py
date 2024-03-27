@@ -14,107 +14,138 @@ import cv2
 import numpy as np
 import math
 from geometry_msgs.msg import Point
+from collections import deque
+import time
 
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
 
-
+def millis():
+    return round(time.time() * 1000)
+def mag(vec):
+	return np.sqrt(vec.dot(vec))
 
 class Face():
-    def __init__(self, marker):
-        
-        self.origin = np.array([
-            marker.points[0].x,
-            marker.points[0].y,
-            marker.points[0].z
-        ])
-        self.normal = np.array([
-            marker.points[1].x - marker.points[0].x,
-            marker.points[1].y - marker.points[0].y,
-            marker.points[1].z - marker.points[0].z
-        ])
+	face_id = 0
+	tresh_xy = 0.3
+	tresh_cos = math.cos(20 * 3.14/180)
 
-        self.tresh = 0.5
+	def __init__(self, marker):
+		self.origin = np.array([
+			marker.points[0].x,
+			marker.points[0].y,
+			marker.points[0].z
+		])
+		self.endpoint = np.array([
+			marker.points[1].x,
+			marker.points[1].y,
+			marker.points[1].z
+		])
+		self.normal = self.endpoint - self.origin
 
-        self.num = 1
-        self.num_tresh = 100
-        self.visited = False
+		self.id = Face.face_id
+		Face.face_id += 1
 
-    def compare(self, face):
-        print(f"!!!!!! diff: {np.linalg.norm(self.origin - face.origin)} normals: {np.dot(self.normal, face.normal)}")
-        return np.linalg.norm(self.origin - face.origin) < self.tresh and np.dot(self.normal, face.normal) > 0.7
+		self.num = 1
+		self.num_tresh = 2
+		self.visited = False
+
+	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
+		
+		kp1 = self.origin + 0.3 * self.normal
+		kp2 = face.origin + 0.3 * face.normal
+		
+		return mag(kp1-kp2) < 0.5
+
+		#known_face_origin = np.copy(self.origin)
+		#known_face_origin[2] = 0
+
+		#new_face_origin = np.copy(face.origin)
+		#new_face_origin[2] = 0
+
+		#print(f"id: {self.id} diff: {np.linalg.norm(self.origin - face.origin)} normals: {np.dot(self.normal, face.normal)}")
+		#return np.linalg.norm(known_face_origin - new_face_origin) < Face.tresh_xy and np.dot(self.normal, face.normal) > Face.tresh_cos
 
 
 class detect_faces(Node):
+	last_n_faces = []
+	last_marker_time = 0
 
-    def __init__(self):
-        super().__init__('people_manager')
+	rolling_origin = np.array([0, 0, 0])
 
-        self.declare_parameters(
-            namespace='',
-            parameters=[
-                ('device', ''),
-        ])
-        
-        self.faces = []
+	def __init__(self):
+		super().__init__('people_manager')
 
-        marker_topic = "/people_marker"
+		self.declare_parameters(
+			namespace='',
+			parameters=[
+				('device', ''),
+		])
+		
+		self.faces = []
 
-        self.marker = self.create_subscription(Marker, marker_topic, self.marker_callback, 10)
-        self.publisher = self.create_publisher(Marker, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
-        
-        self.get_logger().info(f"Node has been initialized! Reading from {marker_topic}.")
+		marker_topic = "/people_marker"
 
+		self.marker = self.create_subscription(Marker, marker_topic, self.marker_callback, 10)
+		self.publisher = self.create_publisher(Marker, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
+		
+		self.get_logger().info(f"Node has been initialized! Reading from {marker_topic}.")
 
+	def marker_callback(self, marker):
+		new_face = Face(marker)
+		if not (np.isfinite(new_face.origin).all() and np.isfinite(new_face.normal).all()):
+			return
 
-    def marker_callback(self, marker):
-        new_face = Face(marker)
-        if not (np.isfinite(new_face.origin).all() and np.isfinite(new_face.normal).all()):
-            return
-        notFound = True
-        for face in self.faces:
-            if(face.compare(new_face)):
-                face.origin = 0.9 * face.origin + 0.1 * new_face.origin
-                face.normal = 0.9 * face.normal + 0.1 * new_face.normal
-                face.num += 1
-                notFound = False
-                if(not face.visited):
-                    if(face.num > face.num_tresh):
-                        point = Marker()
-                        point.type = 2
-                        point.header.frame_id = "/base_link"
-                        point.header.stamp = marker.header.stamp
-                        scale = 0.1
-                        point.scale.x = scale
-                        point.scale.y = scale
-                        point.scale.z = scale
-                        point.color.r = 1.0
-                        point.color.g = 1.0
-                        point.color.b = 1.0
-                        point.color.a = 1.0
-                        point.pose.position.x = face.origin[0] + face.normal[0]
-                        point.pose.position.y = face.origin[1] + face.normal[1]
-                        point.pose.position.z = face.origin[2] + face.normal[2]
-                        self.publisher.publish(point)
-                        face.visited = True
-                break
-        if(notFound):
-            self.faces.append(new_face)
-        
-        self.get_logger().info(f"Got a marker {marker.points[0]} {marker.points[1]}")
-        self.get_logger().info(f"FACES: {len(self.faces)}")
+		# detect_faces.rolling_origin   = 0.9 * detect_faces.rolling_origin   + 0.1 * new_face.origin	
+		# if(np.linalg.norm(detect_faces.rolling_origin - new_face.origin) > 0.05):
+		# 	return
 
+		notFound = True
+		for face in self.faces:
+			if(face.compare(new_face)): #naceloma bi blo boljse, ce bi sli cez vse in poiskai tistega, ki najbolj ustreza, 
+										#ce so meje nastavljene prevec nenatancno, se zgodi, da ustreza vecim obrazom ...
 
+				#face.origin = 0.9 * face.origin + 0.1 * new_face.origin
+                #face.normal = 0.8 * face.normal + 0.2 * new_face.normal Tu je treba se normirat, ker taksan vsota ne ohrani razdalje...
+				face.num += 1
+				notFound = False
+				if(not face.visited):
+					if(face.num > face.num_tresh):
+						point = Marker()
+						point.type = 2
+						point.id = face.id
+						point.header.frame_id = "/oakd_link"
+						point.header.stamp = marker.header.stamp
+						
+						point.scale.x = 0.15
+						point.scale.y = 0.15
+						point.scale.z = 0.15
 
+						point.color.r = 0.0
+						point.color.g = 1.0
+						point.color.b = 0.0
+						point.color.a = 1.0
+						point.pose.position.x = face.origin[0] + face.normal[0] * 0.3
+						point.pose.position.y = face.origin[1] + face.normal[1] * 0.3
+						point.pose.position.z = face.origin[2] + face.normal[2] * 0.3
+						self.publisher.publish(point)
+						face.visited = True
+				break 
+		if(notFound):
+			self.faces.append(new_face)
+	
+		self.get_logger().info(f"Got a marker {marker.points[0]} {marker.points[1]}")
+		self.get_logger().info(f"FACES: {len(self.faces)}")
+		print()
 
 def main():
-    print('People manager node starting.')
+	print('People manager node starting.')
 
-    rclpy.init(args=None)
-    node = detect_faces()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+	rclpy.init(args=None)
+	node = detect_faces()
+	rclpy.spin(node)
+	node.destroy_node()
+	rclpy.shutdown()
 
 if __name__ == '__main__':
-    main()
+	main()

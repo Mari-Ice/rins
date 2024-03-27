@@ -27,7 +27,8 @@ def clamp(x, minx, maxx):
 	return min(max(x, minx), maxx)
 
 class detect_faces(Node):
-
+	face_id = 0
+		
 	def __init__(self):
 		super().__init__('detect_faces')
 
@@ -105,7 +106,7 @@ class detect_faces(Node):
 		point_step = data.point_step
 		row_step = data.row_step		
 
-		print(f"pointcloud size: {width} x {height}")
+		# print(f"pointcloud size: {width} x {height}")
 
 		# iterate over face coordinates
 		for x,y,z in self.faces:
@@ -113,7 +114,7 @@ class detect_faces(Node):
 			z = clamp(z, 0, width-1)
 			y = clamp(y, 0, height-1)
 
-			if(abs(x-y) < 5 or abs(x-z) < 5):
+			if(abs(x-y) < 15 or abs(x-z) < 10):
 				continue
 
 			print(f"pixels: ({x},{y}), ({z},{y})")
@@ -122,14 +123,10 @@ class detect_faces(Node):
 			a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
 			a = a.reshape((height,width,3))
 
-			#Tole zna bit tudi ok
-			# x = int(x * 240/256)
-			# z = int(x * 240/256)
-
 			d1 = a[y,x]
 			d2 = a[y,z]
 		
-			if(np.linalg.norm(d2-d1) > 1):
+			if(np.linalg.norm(d2-d1) > 0.5):
 				continue
 
 			marker = Marker()
@@ -138,7 +135,6 @@ class detect_faces(Node):
 			marker.header.stamp = data.header.stamp
 
 			marker.type = 2
-			marker.id = 0
 
 			# Set the scale of the marker
 			scale = 0.1
@@ -183,6 +179,12 @@ class detect_faces(Node):
 			vector_fwd = vector_fwd / fwd_len
 
 
+			#Izracunali bi lahko kvaliteto zaznave kot
+				#ugotovimo koliko je robot pravokoten na steno
+				#sirina slike
+			#Za to bi rabo subsicribat na /odom in vzeti orientation .z
+			#fajn bi blo svoj tip sporocila napisat, da lahko dodamo se kake podatke, ...
+
 			# create marker
 			marker = Marker()
 
@@ -190,7 +192,8 @@ class detect_faces(Node):
 			marker.header.stamp = data.header.stamp
 
 			marker.type = 0
-			marker.id = 0
+			marker.id = detect_faces.face_id
+			detect_faces.face_id+=1
 
 			# Set the scale of the marker
 			scale = 0.1
@@ -217,6 +220,7 @@ class detect_faces(Node):
 
 			marker.points.append(startpoint)
 			marker.points.append(endpoint)
+			
 
 			self.marker_pub.publish(marker)
 
