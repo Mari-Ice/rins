@@ -21,6 +21,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 
+import math
 import numpy as np
 
 STOP_AFTER_THREE = False
@@ -36,21 +37,38 @@ class MapGoals(Node):
 		super().__init__('map_goals')
 
 		self.keypoints = [
-			[ -1.75999,  -0.74999, 0], 
-			[ -0.25999,  -1.84999, 0], 
-			[ 2.240000,	 -1.49999, 0], 
-			[ 3.590000,  -1.34999, 0], 
-			[ 1.740000,  -0.04999, 0], 
-			[ 0.940000,  -0.34999, 0], 
-			[ 0.940000,  2.000000, 0], 
-			[ 2.440000,  2.000000, 0], 
-			[ 2.340000,  2.300000, 0], 
-			[ 1.440000,  3.450000, 0], 
-			[ -1.65999,  3.150000, 0], 
-			[ -1.50999,  4.750000, 0], 
-			[ -1.55999,  1.200000, 0], 
-			[ -0.20999, -0.049999, 0]
+			[-0.6600, -0.6000, 0],
+			[-1.7100, -0.4000, 0],
+			[-1.7600, -0.8000, 0],
+			[-0.5100, -0.3000, 0],
+			[-0.1600, -0.9500, 0],
+			[-0.5100, -1.3000, 0],
+			[-0.3600, -2.0000, 0],
+			[ 0.0400, -1.7500, 0],
+			[ 3.3400, -1.6500, 0],
+			[ 3.2900, -1.8000, 0],
+			[ 3.2400, -0.9000, 0],
+			[ 1.6400,  0.0000, 0],
+			[ 0.9400, -0.3500, 0],
+			[ 0.8900,  1.8500, 0],
+			[ 0.0900,  2.2500, 0],
+			[ 0.0400,  1.9500, 0],
+			[-1.2100,  1.3000, 0],
+			[-0.9100,  0.9500, 0],
+			[-1.6100,  1.1500, 0],
+			[-1.6600,  3.1500, 0],
+			[-1.8100,  4.4500, 0],
+			[-1.3100,  4.4500, 0],
+			[-1.6100,  3.3500, 0],
+			[-1.1600,  2.9500, 0],
+			[-0.7100,  3.3500, 0],
+			[ 1.3400,  3.4000, 0],
+			[ 2.2900,  2.6000, 0],
+			[ 1.8900,  2.0000, 0],
+			[ 2.4400,  1.3500, 0],
+			[ 2.0900, -1.9000, 0]
 		]
+		self.last_keypoint = [0,0,0]
 		self.face_keypoints = []
 		self.keypoint_index = 0
 		self.forward = True
@@ -92,18 +110,24 @@ class MapGoals(Node):
 		while(new_index < 0):
 			new_index += len(self.keypoints)
 	
-		
 		self.keypoint_index -= 1
 		if self.keypoint_index < 0:
 			self.keypoint_index = len(self.keypoints)-1
-			self.forward = not self.forward
-		return self.keypoints[new_index]
+
+		new_kp = self.keypoints[new_index]	
+		direction = [ new_kp[0]-self.last_keypoint[0], new_kp[1]-self.last_keypoint[1] ] 
+		q = math.atan2(direction[1], direction[0])
+		new_kp[2] = q
+		print(f"YAW: {q}, direction: {direction}")
+		
+		self.last_keypoint = new_kp
+		return new_kp
 
 	def get_next_keypoint(self):
 		if(len(self.face_keypoints) > 0):
 			self.currently_greeting = True
 			return self.face_keypoints.pop(0)
-	   
+	 
 		new_index = self.keypoint_index
 		if(not self.forward):
 			new_index = len(self.keypoints)-1-self.keypoint_index
@@ -112,7 +136,15 @@ class MapGoals(Node):
 		if self.keypoint_index >= len(self.keypoints):
 			self.keypoint_index = 0
 			self.forward = not self.forward
-		return self.keypoints[new_index]
+
+		new_kp = self.keypoints[new_index]	
+		direction = [ new_kp[0]-self.last_keypoint[0], new_kp[1]-self.last_keypoint[1] ] 
+		q = math.atan2(direction[1], direction[0])
+		new_kp[2] = q
+		print(f"YAW: {q}, direction: {direction}")
+		
+		self.last_keypoint = new_kp
+		return new_kp
 
 	def timer_callback(self):
 		if STOP_AFTER_THREE and self.face_count >= 3:

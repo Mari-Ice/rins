@@ -46,7 +46,6 @@ class detect_faces(Node):
 				('device', ''),
 		])
 
-
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value
 
@@ -185,6 +184,13 @@ class detect_faces(Node):
 			p2.point.y = float(d2[1])
 			p2.point.z = float(d2[2])
 
+			p3 = PointStamped() #robot global pos
+			p3.header.frame_id = "/oakd_link"
+			p3.header.stamp = self.get_clock().now().to_msg()
+			p3.point.x = 0.0
+			p3.point.y = 0.0
+			p3.point.z = 0.0
+
 			if(np.linalg.norm(d2-d1) > 0.5):
 				continue
 			if(np.linalg.norm(d2-d1) < 0.05):
@@ -197,6 +203,7 @@ class detect_faces(Node):
 
 			p1 = tfg.do_transform_point(p1, trans)
 			p2 = tfg.do_transform_point(p2, trans)
+			p3 = tfg.do_transform_point(p3, trans)
 
 			d1 = np.array([
 				p1.point.x,
@@ -208,6 +215,14 @@ class detect_faces(Node):
 				p2.point.y,
 				p2.point.z
 			]);
+			d3 = np.array([
+				p3.point.x,
+				p3.point.y,
+				p3.point.z
+			]);
+
+			if(np.linalg.norm(d3-d1) > 2.6): #Ce je obraz dalec od robota, ga bomo zazanli rajsi kdaj ko bomo blizje ...
+				continue
 
 			marker = Marker()
 

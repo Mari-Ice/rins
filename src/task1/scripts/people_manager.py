@@ -54,8 +54,8 @@ class Face():
 		self.visited = False
 
 	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
-		kp1 = self.origin + 0.4 * self.normal
-		kp2 = face.origin + 0.4 * face.normal
+		kp1 = self.origin + 0.25 * self.normal
+		kp2 = face.origin + 0.25 * face.normal
 		return mag(kp1-kp2) < 0.5
 
 
@@ -116,9 +116,9 @@ class detect_faces(Node):
 					point.color.g = 1.0
 					point.color.b = 0.0
 					point.color.a = 1.0
-					point.pose.position.x = face.origin[0] + face.normal[0] * 0.3
-					point.pose.position.y = face.origin[1] + face.normal[1] * 0.3
-					point.pose.position.z = face.origin[2] + face.normal[2] * 0.3
+					point.pose.position.x = face.origin[0] + (face.normal[0] * 0.5)
+					point.pose.position.y = face.origin[1] + (face.normal[1] * 0.5)
+					point.pose.position.z = face.origin[2] + (face.normal[2] * 0.5)
 
 					# marker should be turned towards the face (opposite from the normal)
 					marker_normal = -face.normal
