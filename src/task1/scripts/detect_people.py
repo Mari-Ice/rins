@@ -34,6 +34,8 @@ def clamp(x, minx, maxx):
 
 class detect_faces(Node):
 	face_id = 0
+	min_y = 1000
+	max_y = 0
 		
 	def __init__(self):
 		super().__init__('detect_faces')
@@ -80,7 +82,7 @@ class detect_faces(Node):
 		try:
 			cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
 
-			self.get_logger().info(f"Running inference on image...")
+			# self.get_logger().info(f"Running inference on image...")
 
 			# run inference
 			res = self.model.predict(cv_image, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
@@ -91,13 +93,13 @@ class detect_faces(Node):
 				if bbox.nelement() == 0: # skip if empty
 					continue
 
-				self.get_logger().info(f"Person has been detected!")
+				# self.get_logger().info(f"Person has been detected!")
 
 				bbox = bbox[0]
 
 				# draw rectangle
 				cv_image = cv2.rectangle(cv_image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), self.detection_color, 3)
-				self.faces.append((int(bbox[0]), int(bbox[3]), int(bbox[2])))
+				self.faces.append((int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])))
 
 			cv2.imshow("image", cv_image)
 			key = cv2.waitKey(1)
@@ -119,22 +121,55 @@ class detect_faces(Node):
 		# print(f"pointcloud size: {width} x {height}")
 
 		# Gremo cez vse face, ki smo jih zaznali v zadnjem frame-u
-		for x,y,z in self.faces:
+		for x,y,z,w in self.faces:
 			x = clamp(x, 0, width-1)
 			z = clamp(z, 0, width-1)
 			y = clamp(y, 0, height-1)
+			w = clamp(y, 0, height-1)
 
-			if(abs(x-y) < 15 or abs(x-z) < 10):
+			if(abs(x-y) < 15 or abs(z-w) < 10):
 				continue
-
-			print(f"pixels: ({x},{y}), ({z},{y})")
 
 			# get 3-channel representation of the poitn cloud in numpy format
 			a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
 			a = a.reshape((height,width,3))
 
+			# Ker so slike lahko postavljene razlicno, enkrat gledajo ces steno, drugic ne...,
+			# Zberemo y koordianto tako, da bi naj naceloma vedno delalo.
+			# Druga resistev bi bla, da dobis y koordinato tako, da mapiras laser na sliko in vzames tisti y.
+
+			#print(f"pixels: ({x},{y}), ({z},{w})")
+
+
+			# Dokaj dirty trick, z bisekcijo, najdemo koordinato z ustrezno z visino tj. na sredini stene
+			# Stena je na visini 0.09m, visina stene pa je 0.25 m
+			# torej zelimo najti visino 0.09 + 0.125 = 0.215 (+- 0.05)
+		
+			center_x = int((x+z)*0.5)
+			y = None
+
+			for i in range(110, 170):
+				value = a[i, center_x, 2]
+				#print(f"value: {value}")
+				if(abs(value - (-0.1)) < 0.05):
+					y = i
+					break
+			
+			if(y is None): 
+				print("Could not found proper y.")
+				continue
+
+			# TODO
+			# Tu bi zdej lahko se preveril ali je slika na ravni povrsini.
+			# Tj ali so tocke med d1 in d2 na daljici
+
 			d1 = a[y,x]
 			d2 = a[y,z]
+		
+			detect_faces.min_y = min(detect_faces.min_y, y)
+			detect_faces.max_y = max(detect_faces.max_y, y)
+
+			print(f"y: {y}, min_y: {detect_faces.min_y}, max_y: {detect_faces.max_y}, d1: {d1}, d2: {d2}")
 
 			p1 = PointStamped()
 			p1.header.frame_id = "/oakd_link"
@@ -152,10 +187,12 @@ class detect_faces(Node):
 
 			if(np.linalg.norm(d2-d1) > 0.5):
 				continue
+			if(np.linalg.norm(d2-d1) < 0.05):
+				continue
 
 			#zdej pa te tocke transformiramo v globalne (map) koordinate
 			time_now = rclpy.time.Time()
-			timeout = Duration(seconds=1.0)
+			timeout = Duration(seconds=10.0)
 			trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)	
 
 			p1 = tfg.do_transform_point(p1, trans)

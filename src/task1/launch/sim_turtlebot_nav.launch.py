@@ -31,9 +31,13 @@ ARGUMENTS = [
                           description='Robot namespace'),
     DeclareLaunchArgument('rviz', default_value='true',
                           choices=['true', 'false'], description='Start rviz.'),
-    DeclareLaunchArgument('world', default_value='dis',
+   
+   # DeclareLaunchArgument('world', default_value='dis',
+   #                        description='Ignition World'),
+   DeclareLaunchArgument('world', default_value='demo1',
                           description='Ignition World'),
-    DeclareLaunchArgument('model', default_value='standard',
+
+	DeclareLaunchArgument('model', default_value='standard',
                           choices=['standard', 'lite'],
                           description='Turtlebot4 Model'),
     DeclareLaunchArgument('map', default_value=PathJoinSubstitution(
