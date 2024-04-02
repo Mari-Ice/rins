@@ -146,8 +146,9 @@ class MapGoals(Node):
 		self.last_keypoint = new_kp
 		return new_kp
 
-	def timer_callback(self):
+	def timer_callback(self): 
 		if STOP_AFTER_THREE and self.face_count >= 3:
+			self.get_logger().info(f"\n\nDone, i found and greeted with 3 faces.\n\n")
 			rclpy.shutdown()
 			exit(0)
 
@@ -160,8 +161,6 @@ class MapGoals(Node):
 		
 		# If the robot is not currently navigating to a goal, and there is a goal pending
 		if not self.currently_navigating and self.pending_goal and not self.currently_greeting:
-			#world_x, world_y = self.map_pixel_to_world(self.clicked_x, self.clicked_y)
-
 			world_x, world_y, orientation = self.get_next_keypoint()
 			goal_pose = self.generate_goal_message(world_x, world_y, orientation)
 			self.go_to_pose(goal_pose)
