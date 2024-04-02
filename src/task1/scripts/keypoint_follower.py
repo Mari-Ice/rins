@@ -24,7 +24,7 @@ from rclpy.qos import qos_profile_sensor_data
 import math
 import numpy as np
 
-STOP_AFTER_THREE = False
+STOP_AFTER_THREE = True
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,

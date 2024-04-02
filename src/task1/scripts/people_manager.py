@@ -50,7 +50,7 @@ class Face():
 		Face.face_id += 1
 
 		self.num = 1
-		self.num_tresh = 2
+		self.num_tresh = 3
 		self.visited = False
 
 	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
@@ -101,35 +101,35 @@ class detect_faces(Node):
 				face.num += 1
 				notFound = False
 				if(not face.visited):
-					#if(face.num > face.num_tresh):
-					point = Marker()
-					point.type = 2
-					point.id = face.id
-					point.header.frame_id = "/map"
-					point.header.stamp = marker.header.stamp
-					
-					point.scale.x = 0.15
-					point.scale.y = 0.15
-					point.scale.z = 0.15
+					if(face.num > face.num_tresh):
+						point = Marker()
+						point.type = 2
+						point.id = face.id
+						point.header.frame_id = "/map"
+						point.header.stamp = marker.header.stamp
+						
+						point.scale.x = 0.15
+						point.scale.y = 0.15
+						point.scale.z = 0.15
 
-					point.color.r = 0.0
-					point.color.g = 1.0
-					point.color.b = 0.0
-					point.color.a = 1.0
-					point.pose.position.x = face.origin[0] + (face.normal[0] * 0.5)
-					point.pose.position.y = face.origin[1] + (face.normal[1] * 0.5)
-					point.pose.position.z = face.origin[2] + (face.normal[2] * 0.5)
+						point.color.r = 0.0
+						point.color.g = 1.0
+						point.color.b = 0.0
+						point.color.a = 1.0
+						point.pose.position.x = face.origin[0] + (face.normal[0] * 0.5)
+						point.pose.position.y = face.origin[1] + (face.normal[1] * 0.5)
+						point.pose.position.z = face.origin[2] + (face.normal[2] * 0.5)
 
-					# marker should be turned towards the face (opposite from the normal)
-					marker_normal = -face.normal
-					q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
-					point.pose.orientation.x = q[0]
-					point.pose.orientation.y = q[1]
-					point.pose.orientation.z = q[2]
-					point.pose.orientation.w = q[3]
+						# marker should be turned towards the face (opposite from the normal)
+						marker_normal = -face.normal
+						q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
+						point.pose.orientation.x = q[0]
+						point.pose.orientation.y = q[1]
+						point.pose.orientation.z = q[2]
+						point.pose.orientation.w = q[3]
 
-					self.publisher.publish(point)
-					face.visited = True
+						self.publisher.publish(point)
+						face.visited = True
 				break 
 		if(notFound):
 			self.faces.append(new_face)

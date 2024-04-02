@@ -33,10 +33,11 @@ def generate_launch_description():
             package='task1',
             executable='talker.py',
             name='talker',
-        ),
-        Node(
-            package='task1',
-            executable='keypoint_follower.py',
-            name='keypoint_follower',
         )
+		# ,
+        # Node(
+        #     package='task1',
+        #     executable='keypoint_follower.py',
+        #     name='keypoint_follower',
+        # )
     ])
