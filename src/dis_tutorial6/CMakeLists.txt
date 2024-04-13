@@ -66,6 +66,7 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/detect_rings.py
+  scripts/floor_mask.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
