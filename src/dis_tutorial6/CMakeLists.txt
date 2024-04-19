@@ -19,6 +19,7 @@ find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(message_filters REQUIRED)
 
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -30,7 +31,7 @@ include_directories(${PCL_INCLUDE_DIRS} include)
 link_directories(${PCL_LIBRARY_DIRS})
 # add_definitions(${PCL_DEFINITIONS})
 
-set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions)
+set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions message_filters)
 
 add_executable(pcl_forwarder src/forwarder.cpp)
 ament_target_dependencies(pcl_forwarder ${dependencies})
@@ -66,6 +67,7 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/detect_rings.py
+  scripts/detect_rings2.py
   scripts/floor_mask.py
   DESTINATION lib/${PROJECT_NAME})
 
