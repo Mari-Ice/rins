@@ -34,6 +34,7 @@ set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf
 
 install(PROGRAMS
   scripts/detect_rings_depth.py
+  scripts/autonomous_explorer.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
