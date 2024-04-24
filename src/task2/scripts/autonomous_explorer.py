@@ -69,6 +69,7 @@ class MapGoals(Node):
 						 "origin":None} # origin will be in the format [x,y,theta]
 		self.face_count = 0
 		# Subscribe to map, and create an action client for sending goals
+		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, map_topic, self.map_callback, qos_profile)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 		self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
 		# Create a timer, to do the main work.
@@ -77,6 +78,29 @@ class MapGoals(Node):
 		self.client = self.create_client(Trigger, '/say_hello')
 
 		self.calculate_keypoints()
+
+	def map_callback(self, msg):
+		self.get_logger().info(f"Read a new Map (Occupancy grid) from the topic.")
+		# reshape the message vector back into a map
+		self.map_np = np.asarray(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
+		# fix the direction of Y (origin at top for OpenCV, origin at bottom for ROS2)
+		self.map_np = np.flipud(self.map_np)
+		# change the colors so they match with the .pgm image
+		self.map_np[self.map_np==0] = 127
+		self.map_np[self.map_np==100] = 0
+		# load the map parameters
+		self.map_data["map_load_time"]=msg.info.map_load_time
+		self.map_data["resolution"]=msg.info.resolution
+		self.map_data["width"]=msg.info.width
+		self.map_data["height"]=msg.info.height
+		quat_list = [msg.info.origin.orientation.x,
+					 msg.info.origin.orientation.y,
+					 msg.info.origin.orientation.z,
+					 msg.info.origin.orientation.w]
+		self.map_data["origin"]=[msg.info.origin.position.x,
+								 msg.info.origin.position.y,
+								 tf_transformations.euler_from_quaternion(quat_list)[-1]]
+		#self.get_logger().info(f"Read a new Map (Occupancy grid) from the topic.")
 
 	def get_prev_keypoint(self):
 		new_index = self.keypoint_index-1
@@ -257,7 +281,7 @@ class MapGoals(Node):
 		self.face_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
 
 	def calculate_keypoints(self):
-		image = cv2.imread('/home/theta/rins/src/dis_tutorial3/maps/map.pgm')
+		image = self.map_np
 		original_image = image.copy()
 
 		# convert the image to grayscale
@@ -289,16 +313,10 @@ class MapGoals(Node):
 		# find connected components and their centroids
 		num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(image, connectivity=8)
 
-		# print the centroids
 		for i in range(1, num_labels):
 			# print(f"Centroid {i}: {centroids[i]}")
-			self.keypoints.append([centroids[i][0], centroids[i][1], 0])
-
-def main():
-	rclpy.init(args=None)
-	node = MapGoals()
-	rclpy.spin(node)
-	rclpy.shutdown()
+			world_keypoint = self.map_pixel_to_world(centroids[i][0], centroids[i][1])
+			self.keypoints.append([world_keypoint[0], world_keypoint[1], 0])
 
 if __name__ == '__main__':
 	main()
