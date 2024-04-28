@@ -194,7 +194,7 @@ class sky_mask(Node):
 
 		for i,c in enumerate(contours):
 			x,y,w,h = cv2.boundingRect(c)
-			if(w < 8 or h < 8):
+			if(w < 7 or h < 7):
 				continue
 
 			x1 = max(0,x-0)
