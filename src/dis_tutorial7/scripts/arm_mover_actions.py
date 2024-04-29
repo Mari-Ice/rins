@@ -42,11 +42,12 @@ class ArmMoverAction(Node):
         # Predefined positions for the robot arm
         self.joint_names = ['arm_base_joint', 'arm_shoulder_joint', 'arm_elbow_joint', 'arm_wrist_joint']
         self.arm_poses = {'look_for_parking':[0.,0.4,1.5,1.2],
+                          'look_for_parking2' : [0.0, -0.053, 1.0756, 2.1193],
                           'look_for_qr':[0.,0.6,0.5,2.0],
                           'garage':[0.,-0.45,2.8,-0.8],
                           'up':[0.,0.,0.,0.],
                           'manual':None,
-                          'seth':None
+                          'setp':None
                          }
 
         self.get_logger().info(f"Initialized the Arm Mover node! Waiting for commands...")
@@ -64,21 +65,30 @@ class ArmMoverAction(Node):
         # self.get_logger().info(f"Recieved command {command}")
         #print(f"cmd_str: {command_string}, cmd: {command}") #neki
         if command is None:
-           if(command_string.split(':')[0] == "seth"):
-               height = eval(command_string.split(':')[1])
-               arm_length = 0.5
-               theta = math.asin(height / (2*arm_length)) 
-               point.positions = [0.0, -math.pi/2 + theta, math.pi - 2*theta, math.pi/2 + theta]
-               print(f"cmd seth: {point.positions}")
+           cmd_name = command_string.split(':')[0]
+           if(cmd_name=="setp"):
+               x,y = eval(command_string.split(':')[1])
+               d = math.sqrt(x*x+y*y)
+               arm_length = 0.25
+               q = d / (2*arm_length)
+               if(abs(q) > 1.0):
+                   print("Roka ne doseze takega polozaja.")
+               else:
+                   theta = math.acos(q) 
+                   fi0 = math.atan2(y,x)
+                   fi1 = fi0+theta
+                   pp = [0.0, math.pi/2 - fi1, 2*theta, math.pi/2 + fi0 - theta]
+                   point.positions = pp
+                   print(f"cmd setp: {pp}")
            else:
                self.get_logger().info(f"Recieved command MANUAL command {command_string.split(':')[1]}")
                point.positions = eval(command_string.split(':')[1])
         else:
             point.positions = command
-        point.time_from_start = rclpy.duration.Duration(seconds=3.).to_msg()
+        point.time_from_start = rclpy.duration.Duration(seconds=1.).to_msg()
 
         goal_msg = FollowJointTrajectory.Goal()
-        goal_msg.goal_time_tolerance = rclpy.duration.Duration(seconds=3.).to_msg()
+        goal_msg.goal_time_tolerance = rclpy.duration.Duration(seconds=1.).to_msg()
         goal_msg.trajectory.joint_names = self.joint_names
         goal_msg.trajectory.points.append(point)
 
