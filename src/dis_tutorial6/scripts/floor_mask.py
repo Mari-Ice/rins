@@ -41,6 +41,15 @@ amcl_pose_qos = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
+def sign(x):
+	if(x<0):
+		return -1.
+	return 1.	
+def positive_angle(angle):
+	while(angle < 0):
+		angle += 2*math.pi
+	return math.fmod(angle, 2*math.pi)
+
 class floor_mask(Node):
 	def __init__(self):
 		super().__init__('floor_mask')
@@ -56,14 +65,14 @@ class floor_mask(Node):
 
 
 		self.initial_pose_received = False
-		self.position = None
-		self.rotation = None
-		self.yaw = 0
-		self.localization_pose_sub = self.create_subscription(PoseWithCovarianceStamped,
-															  'amcl_pose',
-															  self._amclPoseCallback,
-															  amcl_pose_qos)
-		self.waitUntilNav2Active()
+		# self.position = None
+		# self.rotation = None
+		# self.yaw = 0
+		# self.localization_pose_sub = self.create_subscription(PoseWithCovarianceStamped,
+		# 													  'amcl_pose',
+		# 													  self._amclPoseCallback,
+		# 													  amcl_pose_qos)
+		# self.waitUntilNav2Active()
 
 		# For listening and loading the TF
 		self.tf_buffer = Buffer()
@@ -79,12 +88,10 @@ class floor_mask(Node):
 
 		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
+		self.pixel_locations = None
+		self.pixel_locations_set = False
 		self.park_state = ParkState.IDLE
 		self.circle_quality = 0
-		self.start_yaw = 0
-		self.target_yaw = 0
-		self.start_pos = [0,0]
-		self.target_dist = 0
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
@@ -147,25 +154,21 @@ class floor_mask(Node):
 		#amapak je dosti tezje resit tak sistem heh
 		if(len(points) < 3):
 			return None
-		
+	
 		mat_A = points.copy()
 		mat_A[:,2] = 1
+
 		vec_B = mat_A[:,0]**2 + mat_A[:,1]**2
 		
 		#Resimo linearen sistem	 A*[a,b,c]^T=b
 		a,b,c = np.linalg.lstsq(mat_A, vec_B, rcond=None)[0]
 
-		cx = -a/2
+		cx = a/2
 		cy = b/2
 		r = math.sqrt(4*c+a*a+b*b)/2
 
 		return [cx,cy,r]
 	
-	def positive_angle(self,angle):
-		while(angle < 0):
-			angle += 2*math.pi
-		return math.fmod(angle, 2*math.pi)
-		#return math.fmod(angle + math.pi, 2*math.pi)
 
 	#def rgb_pc_callback(self, rgb, pc, depth_raw):
 	def rgb_pc_callback(self, rgb, pc):
@@ -175,6 +178,15 @@ class floor_mask(Node):
 		width	  = pc.width
 		point_step = pc.point_step
 		row_step   = pc.row_step		
+
+		if(not self.pixel_locations_set):
+			self.pixel_locations = np.full((height, width,3), 0, dtype=np.float64)
+			self.pixel_locations_set = True
+			for y in range(0, height):
+				for x in range(0, width):
+					self.pixel_locations[y][x] = [x,y,0]
+		
+		#print(self.pixel_locations)
 
 		## Tocke bi lahko transformiral vsaj v koordiante na oakd, zato, da ko se roka premakne, stvari se zmeraj isto delajo ...
 		## Amapak ker zgleda da v pythonovem api-ji ni fukncije ki bi tranformirala cel point cloud, tega potem ne bom delal.
@@ -193,54 +205,66 @@ class floor_mask(Node):
 		mask[(img[:,:,:] < 10).all(axis=2)] = 255
 		mask[xyz[:,:,2] < thresh] = (0)
 
-		##TODO, namesto, da se uporablja samo zelo majhne hitrosti, bi se lahko kak PID regulator vrgu gor...
+		#TODO
+		#Zdej sem spremenil, da se poravnala izkljucno samo na sliko.
+		#Kaj tocno naredit v primeru, ko slabo vidimo krog?
 
-		circle = self.fit_circle(xyz[mask==255])
+		#TODO
+		#V primeru ko nic ne vidimo, se ravnamo po nav2 stacku.
+		#Kadar krog vidimo 
+
+		circle = self.fit_circle(self.pixel_locations[mask==255])
 		if(circle != None):	
-			circle_quality = circle_quality = math.pow(math.e, -(abs(0.24 - circle[2])))
-			circle[1] += 0.20
-			if(circle_quality >= self.circle_quality and self.park_state != ParkState.PARKED):
-				self.circle_quality = circle_quality
-				self.start_yaw = self.yaw
-				self.target_yaw = -math.pi/2 + math.atan2(circle[1], circle[0]) 
-				self.park_state = ParkState.ROTATING
-				self.start_pos = self.position
-				self.target_dist = circle[1]
+			circle_quality = circle_quality = math.pow(math.e, -0.1*(abs(78.59 - circle[2])))
 
-		if(self.park_state == ParkState.DRIVING):
-			fwd_error = (abs(self.target_dist) - np.linalg.norm(self.position - self.start_pos)) * (self.target_dist / abs(self.target_dist))
-			print(f"Fwd_error: {fwd_error}")
-		
-			p = fwd_error * 0.5
-			if(abs(p) < 0.1):
-				p = (p/abs(p))*0.1
+			if(circle_quality > 0.2):
+				img = cv2.arrowedLine(img, (160,180), (int(circle[0]), int(circle[1])), (0,0,255), 5)  
 
-			cmd_msg = Twist()
-			cmd_msg.angular.z = 0.
-			if(abs(fwd_error) < 0.02): #stop rotating, next_state
-				cmd_msg.linear.x = 0.
-				self.park_state = ParkState.PARKED
-				print("Parked")
-			else:
-				cmd_msg.linear.x = p
-			self.teleop_pub.publish(cmd_msg)
+				if(self.park_state != ParkState.PARKED and (self.park_state == ParkState.IDLE or circle_quality > self.circle_quality)):
+					print("Rotating")
+					self.park_state = ParkState.ROTATING
+					self.circle_quality = circle_quality
 
-		if(self.park_state == ParkState.ROTATING):
-			yaw_error = self.positive_angle(-math.pi + self.positive_angle(self.target_yaw) - self.positive_angle(self.yaw) + self.positive_angle(self.start_yaw)) - math.pi
-			print(f"Yaw error: {yaw_error}, circle_quality: {self.circle_quality}")
-			
-			cmd_msg = Twist()
-			cmd_msg.linear.x = 0.
-			if(abs(yaw_error) < 0.02): #stop rotating, next_state
-				cmd_msg.angular.z = 0.
-				self.park_state = ParkState.DRIVING
-			else:
-				p = yaw_error * 1.0	
-				if(abs(p) < 0.1):
-					p = (p/abs(p))*0.1
-				cmd_msg.angular.z = p
-			self.teleop_pub.publish(cmd_msg)
+				if(self.park_state == ParkState.DRIVING):
+					error_raw = circle[1] - 180
+					error = abs(error_raw)
+					error_dir = -sign(error_raw)
+					kp = 0.01
+					min_vel = 0.1
+
+					out_strength = max(min_vel, error * kp)
+					output = error_dir * out_strength
+						
+					cmd_msg = Twist()
+					cmd_msg.angular.z = 0.
+					if(abs(error) < 3): #stop driving, parked.
+						cmd_msg.linear.x = 0.
+						self.park_state = ParkState.PARKED
+						print("PARKED")
+					else:
+						cmd_msg.linear.x = output
+					self.teleop_pub.publish(cmd_msg)
+
+				if(self.park_state == ParkState.ROTATING):
+					error_raw = positive_angle(-math.pi/2 + math.atan2(circle[1]-height, circle[0]-160)) - math.pi
+
+					error = abs(error_raw)
+					error_dir = -sign(error_raw)
+					kp = 2.0
+					min_vel = 0.2
+
+					out_strength = max(min_vel, error * kp)
+					output = error_dir * out_strength
 					
+					cmd_msg = Twist()
+					cmd_msg.linear.x = 0.
+					if(abs(error) < 0.01): #stop rotating, next_state
+						cmd_msg.angular.z = 0.
+						self.park_state = ParkState.DRIVING
+						print("Rotated")
+					else:
+						cmd_msg.angular.z = output
+					self.teleop_pub.publish(cmd_msg)
 			
 		cv2.imshow("Mask", mask)
 		cv2.imshow("Image", img)
