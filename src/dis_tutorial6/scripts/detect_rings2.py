@@ -59,26 +59,7 @@ class sky_mask(Node):
 		cv2.moveWindow("c2", 830 ,450)
 		cv2.moveWindow("c3", 1245,450)
 
-
-	# def cont_pos(self, cont, a, mask1):
-	# 	x,y,w,h = cv2.boundingRect(cont)
-	# 	masked_ring_a = a[y:y+h,x:x+w].copy()
-	# 	masked_ring_a[mask1[y:y+h,x:x+w]!=255] = float('NaN')
-	# 	masked_ring_a[(a[y:y+h,x:x+w]>10000)]  = float('NaN')
-
-	# 	result = np.array([0,0,0],dtype=np.float64)
-	# 	cnt = 1
-
-	# 	for y in masked_ring_a:
-	# 		for x in y:
-	# 			if(not np.isnan(np.min(x))):
-	# 				result[0] += x[0]
-	# 				result[1] += x[1]
-	# 				result[2] += x[2]
-	# 				cnt += 1
-	# 	result *= 1/cnt
-	# 	return result
-	def cont_pos(self, cont, a, mask1): #more better
+	def cont_pos(self, cont, a, mask1):
 		x,y,w,h = cv2.boundingRect(cont)
 		
 		mask1 =     mask1[y:y+h,x:x+w].copy()

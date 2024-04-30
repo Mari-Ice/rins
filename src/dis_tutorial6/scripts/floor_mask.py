@@ -27,7 +27,6 @@ from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
 
-
 ##Note: Roka more bit v parked2 poziciji, da kaj od tega dela.
 
 class ParkState(Enum):
@@ -84,6 +83,8 @@ class floor_mask(Node):
 		self.circle_quality = 0
 		self.start_yaw = 0
 		self.target_yaw = 0
+		self.start_pos = [0,0]
+		self.target_dist = 0
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
@@ -126,7 +127,8 @@ class floor_mask(Node):
 	def _amclPoseCallback(self, msg):
 		self.initial_pose_received = True
 		#self.current_pose = msg.pose
-		self.position = msg.pose.pose.position
+		p = msg.pose.pose.position
+		self.position = np.array([p.x, p.y, p.z])
 		self.rotation = msg.pose.pose.orientation
 
 		q = self.rotation
@@ -197,25 +199,31 @@ class floor_mask(Node):
 		if(circle != None):	
 			circle_quality = circle_quality = math.pow(math.e, -(abs(0.24 - circle[2])))
 			circle[1] += 0.20
-			if(self.park_state == ParkState.IDLE or circle_quality >= self.circle_quality):
+			if(circle_quality >= self.circle_quality and self.park_state != ParkState.PARKED):
 				self.circle_quality = circle_quality
 				self.start_yaw = self.yaw
 				self.target_yaw = -math.pi/2 + math.atan2(circle[1], circle[0]) 
-			if(self.park_state == ParkState.IDLE):
 				self.park_state = ParkState.ROTATING
-			if(self.park_state == ParkState.DRIVING):
-				fwd_error = circle[1] #naceloma bi lahko vzel tudi normo, amapak hej, tisto lahko povzroci pa druge probleme
-				print(f"Fwd_error: {fwd_error}")
-			
-				cmd_msg = Twist()
-				cmd_msg.angular.z = 0.
-				if(abs(fwd_error) < 0.02): #stop rotating, next_state
-					cmd_msg.linear.x = 0.
-					self.park_state = ParkState.PARKED
-					print("Parked")
-				else:
-					cmd_msg.linear.x = 0.1 * (fwd_error) / abs(fwd_error)
-				self.teleop_pub.publish(cmd_msg)
+				self.start_pos = self.position
+				self.target_dist = circle[1]
+
+		if(self.park_state == ParkState.DRIVING):
+			fwd_error = (abs(self.target_dist) - np.linalg.norm(self.position - self.start_pos)) * (self.target_dist / abs(self.target_dist))
+			print(f"Fwd_error: {fwd_error}")
+		
+			p = fwd_error * 0.5
+			if(abs(p) < 0.1):
+				p = (p/abs(p))*0.1
+
+			cmd_msg = Twist()
+			cmd_msg.angular.z = 0.
+			if(abs(fwd_error) < 0.02): #stop rotating, next_state
+				cmd_msg.linear.x = 0.
+				self.park_state = ParkState.PARKED
+				print("Parked")
+			else:
+				cmd_msg.linear.x = p
+			self.teleop_pub.publish(cmd_msg)
 
 		if(self.park_state == ParkState.ROTATING):
 			yaw_error = self.positive_angle(-math.pi + self.positive_angle(self.target_yaw) - self.positive_angle(self.yaw) + self.positive_angle(self.start_yaw)) - math.pi
@@ -227,7 +235,10 @@ class floor_mask(Node):
 				cmd_msg.angular.z = 0.
 				self.park_state = ParkState.DRIVING
 			else:
-				cmd_msg.angular.z = 0.5 * (yaw_error) / abs(yaw_error)
+				p = yaw_error * 1.0	
+				if(abs(p) < 0.1):
+					p = (p/abs(p))*0.1
+				cmd_msg.angular.z = p
 			self.teleop_pub.publish(cmd_msg)
 					
 			
