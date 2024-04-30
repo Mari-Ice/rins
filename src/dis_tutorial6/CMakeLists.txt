@@ -69,6 +69,7 @@ install(PROGRAMS
   scripts/detect_rings.py
   scripts/detect_rings2.py
   scripts/floor_mask.py
+  scripts/park.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
