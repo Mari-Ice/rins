@@ -27,6 +27,9 @@ from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
 
+
+##Note: Roka more bit v parked2 poziciji, da kaj od tega dela.
+
 class ParkState(Enum):
 	IDLE = 0
 	ROTATING = 1
