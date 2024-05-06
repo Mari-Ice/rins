@@ -310,14 +310,16 @@ class MapGoals(Node):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         original_image = image.copy()
 
-        # threshold the image
-        _, image = cv2.threshold(image, 100, 255, cv2.THRESH_BINARY)
-
-        dst = 255 - image
+        # thin the image
+        _, dst = cv2.threshold(image, 100, 255, cv2.THRESH_BINARY)
+        dst = 255 - dst
         dst	= cv2.ximgproc.thinning(dst)
-        cv2.imshow("preprocessed", dst)
+        # cv2.imshow("preprocessed", dst)
 
-        lines = cv2.HoughLines(dst, 1, np.pi / 180, 25, None, 0, 0)
+        # threshold image
+        _, image = cv2.threshold(image, 240, 255, cv2.THRESH_BINARY)
+
+        lines = cv2.HoughLines(dst, 1, 10 * np.pi / 180, 20, None, 0, 0)
 
         if lines is not None:
             for i in range(0, len(lines)):
@@ -329,13 +331,13 @@ class MapGoals(Node):
                 y0 = b * rho
                 pt1 = (int(x0 + 1000*(-b)), int(y0 + 1000*(a)))
                 pt2 = (int(x0 - 1000*(-b)), int(y0 - 1000*(a)))
-                cv2.line(image, pt1, pt2, (100,100,100), 3, cv2.LINE_AA)
+                cv2.line(image, pt1, pt2, (0,0,0), 3, cv2.LINE_AA)
 
         # erode
-        # kernel = np.ones((10,10), np.uint8)
-        # image = cv2.erode(image, kernel, iterations=1)
+        kernel = np.ones((10,10), np.uint8)
+        image = cv2.erode(image, kernel, iterations=1)
 
-        cv2.imshow("rooms", image)
+        # cv2.imshow("rooms", image)
 
         # find connected components and their centroids
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(image, connectivity=8)
@@ -375,9 +377,28 @@ class MapGoals(Node):
 
             self.keypoint_markers.markers.append(marker)
 
+        # define distance matrix between keypoints
+        distances = np.zeros((len(self.keypoints), len(self.keypoints)))
+        for i in range(len(self.keypoints)):
+            for j in range(len(self.keypoints)):
+                distances[i, j] = np.linalg.norm(np.array(self.keypoints[i]) - np.array(self.keypoints[j]))
+
+        n = distances.shape[0]
+        route = [0] # Start at A
+        visited = set([0])
+        while len(visited) < n:
+            current = route[-1]
+            nearest = min([(i, distances[current][i]) for i in range(n) if i not in visited], key=lambda x: x[1])[0]
+            route.append(nearest)
+            visited.add(nearest)
+        route.append(0) # Return to A
+        
+        # reorder keypoints
+        self.keypoints = [self.keypoints[i] for i in route]
+
         self.keypoint_publisher.publish(self.keypoint_markers)
-        cv2.imshow("waypoints", original_image)
-        cv2.waitKey(0)
+        # cv2.imshow("waypoints", original_image)
+        #vcv2.waitKey(0)
 
     def add_ring_callback(self, markers : MarkerArray):
         
