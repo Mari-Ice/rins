@@ -37,6 +37,9 @@ amcl_pose_qos = QoSProfile(
 		  depth=1)
 
 
+#	Kamera naj bo v looking_for_rings polozaju.
+#	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
+
 def separate(depth, dep=0):
 	if(dep > 10): #max depth
 		return []
@@ -117,7 +120,7 @@ def cont_pos(cont, data):
 
 	x,y,w,h = cv2.boundingRect(cont)
 	
-	mask1 =     mask1[y:y+h,x:x+w].copy()
+	mask1 =	 mask1[y:y+h,x:x+w].copy()
 	masked_ring_a = a[y:y+h,x:x+w]
 
 	mask1[masked_ring_a[:,:,1]>10000] = 0
@@ -145,7 +148,7 @@ class test(Node):
 		self.tf_buffer = Buffer()
 		self.tf_listener = TransformListener(self.tf_buffer, self)
 
-		self.rgb_sub = message_filters.Subscriber(self, Image,	     "/top_camera/rgb/preview/image_raw")
+		self.rgb_sub = message_filters.Subscriber(self, Image,		 "/top_camera/rgb/preview/image_raw")
 		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/top_camera/rgb/preview/depth/points")
 		self.depth_sub = message_filters.Subscriber(self, Image,	 "/top_camera/rgb/preview/depth")
 
@@ -198,6 +201,11 @@ class test(Node):
 		mask[(xyz[:,:,1] > -0.168) & (xyz[:,:,1] < 1000)] = 255
 		#mask[(xyz[:,:,1] > 0.4) & (xyz[:,:,1] < 1000)] = 255
 
+
+		# A = 2*(cv2.getTrackbarPos("A", 'Image') / 1000) - 1
+		# B = 2*(cv2.getTrackbarPos("B", 'Image') / 1000) - 1
+		# img_display[(xyz[:,:,1] > A) & (xyz[:,:,1] < 1000)] = (0,0,0) ##TEGA DEJ
+
 		depth_raw = self.bridge.imgmsg_to_cv2(depth_raw, "32FC1")
 		depth_raw[depth_raw==np.inf] = 0
 		
@@ -246,7 +254,7 @@ class test(Node):
 				circle_img  = img[y1:y2,x1:x2].copy()
 				circle_mask = mask1[y1:y2,x1:x2]
 				circle_img[circle_mask==0] = (0,0,0)
-				# cv2.imshow(f"Circle{j}_{i}", circle_img)
+				#cv2.imshow(f"Circle{j}_{i}", circle_img)
 
 				color = circle_img.sum(axis=(0,1))
 				color -= min(color)
@@ -282,8 +290,6 @@ class test(Node):
 
 		#print(f"gutl: {len(gut)} uniq: {len(np.unique(gut))}, gut: {gut}")
 
-		A = 1000*(cv2.getTrackbarPos("A", 'Image') / 1000)
-		B = 1000*(cv2.getTrackbarPos("B", 'Image') / 1000)
 
 		# edges = cv2.Canny(image=depth, threshold1=A, threshold2=B) # Canny Edge Detection
 		# cv2.imshow('Canny Edge Detection', edges)

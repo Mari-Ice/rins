@@ -1,0 +1,5 @@
+int8 color
+---
+bool success
+string message
+int8 color
