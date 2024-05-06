@@ -351,7 +351,7 @@ class MapGoals(Node):
             
             # add marker
             marker = Marker()
-            marker.header.frame_id = "/map"
+            marker.header.frame_id = "/oakd_link"
             marker.header.stamp = self.get_clock().now().to_msg()
 
             marker.id = i

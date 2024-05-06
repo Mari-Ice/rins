@@ -73,6 +73,7 @@ class detect_faces(Node):
 		self.faces = []
 
 		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
+		self.start_time = self.get_clock().now()
 
 	def rgb_callback(self, data):
 
@@ -278,6 +279,10 @@ class detect_faces(Node):
 
 			marker.header.frame_id = "/map"
 			marker.header.stamp = data.header.stamp
+			
+			#TODO: ugotovi kako dobit pravi cajt, ker ce das clock().now() in uporabis karkoli razen /map zadeva ne dela...	
+			#marker.header.frame_id = "/oakd_link"
+			#marker.header.stamp = self.get_clock().now().to_msg()
 
 			marker.type = 0
 			marker.id = detect_faces.face_id

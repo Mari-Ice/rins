@@ -68,14 +68,11 @@ def separate(depth, dep=0):
 			max_diff_index = i
 
 	m = gut[max_diff_index]
-	m_min = gut[0]
-	m_max = gut[-1]
+	m_min = (gut[0] + gut[1] + gut[2])/3
+	m_max = (gut[-1] + gut[-2] + gut[-3])/3
 	m_diff = m_max - m_min
 
-	thresh = lin_map(m_diff, 0.05, 0.21, 0.01, 0.03)
-	thresh = clamp(thresh, 0.01, 0.03)
-
-	#thresh = 0.03
+	thresh = 0.025
 	if(max_diff < thresh):
 		mask = np.zeros_like(depth, dtype=np.uint8)
 		mask[depth>0] = 255
@@ -88,44 +85,6 @@ def separate(depth, dep=0):
 	g2[depth>=m] = 0
 
 	return separate(g1, dep+1) + separate(g2, dep+1)
-
-def join_contours(contours, data, contour_norm, max_dist):
-	LENGTH = len(contours)
-	status = np.zeros((LENGTH,1))
-	
-	for i,cnt1 in enumerate(contours):
-		mean1 = contour_norm(cnt1, data)
-		
-		if(np.linalg.norm(mean1) < 0.01): #Todo not ikzakli rajt
-			continue
-		
-		x = i
-		if i != LENGTH-1:
-			for j,cnt2 in enumerate(contours[i+1:]):
-				mean2 = contour_norm(cnt2, data)
-				
-				if(np.linalg.norm(mean2) < 0.01): #Todo not ikzakli rajt
-					continue
-
-				x = x+1
-				dist = (np.linalg.norm(mean2-mean1) < max_dist)
-				if dist == True:
-					val = min(status[i],status[x])
-					status[x] = status[i] = val
-				else:
-					if status[x]==status[i]:
-						status[x] = i+1
-	
-	unified = []
-	if(len(status) != 0):
-		maximum = int(status.max())+1
-		for i in range(maximum):
-			pos = np.where(status==i)[0]
-			if pos.size != 0:
-				cont = np.vstack(tuple(contours[i] for i in pos))
-				hull = cv2.convexHull(cont)
-				unified.append(hull)
-	return unified
 
 class RingDetection(Node):
 	def __init__(self):
@@ -151,9 +110,12 @@ class RingDetection(Node):
 		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 10, 0.3, allow_headerless=False) 
 		self.ts.registerCallback(self.rgb_pc_callback)
 
+		#TODO to spremeni v msg tip, marker je samo zacasno
+		self.marker_pub = self.create_publisher(Marker, "/rings", QoSReliabilityPolicy.BEST_EFFORT)
+
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
 
 		# cv2.namedWindow("Depth0", cv2.WINDOW_NORMAL)
 		# cv2.namedWindow("Depth1", cv2.WINDOW_NORMAL)
@@ -262,15 +224,15 @@ class RingDetection(Node):
 
 				color = (color / color_max)
 				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
-				color = (color*255)
-				color = [int(color[0]), int(color[1]), int(color[2])]
+				color_uint = (color*255)
+				color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
 				
 				color_index = int(((hue + 60)%360) / 120)
 				color_names = ["red", "green", "blue"]
 				color_name = color_names[color_index]
 				# print(f"color: {color_name}")
 
-				cv2.rectangle(img_display, (x1, y1), (x2, y2), color, 1)
+				cv2.rectangle(img_display, (x1, y1), (x2, y2), color_uint, 1)
 				#cv2.putText(img_display, color_name, (cx ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
 				
@@ -283,46 +245,52 @@ class RingDetection(Node):
 				color_dist_sq = (colors_set - avg_color)**2
 				avg_color_dist = np.mean(color_dist_sq)
 
-				q_colors	= math.exp(-0.0002*avg_color_dist)
+				q_colors	= math.exp(-0.0004*avg_color_dist)
 				q_size	  = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
 				q_okroglost = math.exp(-3.27*(1-min(w,h)/max(w,h))**2)
 				q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(ring_position))**2)
 
-				q1 = min(q_size, q_okroglost, q_colors, q_distance)
-				q2 = np.mean(np.array([q_colors   , q_size	 , q_okroglost, q_distance]))
-				q3 = np.prod(np.array([q_colors   , q_size	 , q_okroglost, q_distance]))
-				
+				q_geom = (q_size + q_okroglost + q_distance)/3
+				q = min(q_geom, q_colors)
 
-				#TO posljemo
-				cv2.putText(img_display, f"{q1:.3f}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				cv2.putText(img_display, f"{q2:.3f}", (x2 ,cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				cv2.putText(img_display, f"{q3:.3f}", (x2 ,cy+40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+				# #TO posljemo
+				# cv2.putText(img_display, f"{q1:.3f}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+				# cv2.putText(img_display, f"{q2:.3f}", (x2 ,cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+				# cv2.putText(img_display, f"{q3:.3f}", (x2 ,cy+40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+				# cv2.putText(img_display, f"{q4:.3f}", (x2 ,cy+60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+				cv2.putText(img_display, f"{q:.2f}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_uint, 2) #Preveri ali je to sploh smiselno
 				
 				msg = RingInfo()
-				#msg.q = q
-				msg.color = color
+				msg.q = q
+				msg.color = color_uint
 				msg.position = [float(ring_position[0]), float(ring_position[1]), float(ring_position[2]) ]
 				##TODO pusblish msg
 
+				marker = Marker()
+				marker.header.frame_id = "/top_camera_link"
+				marker.header.stamp = rgb.header.stamp
+				marker.id = int(10000*random.random())
+				marker.type = 2
+				marker.scale.x = 0.1
+				marker.scale.y = 0.1
+				marker.scale.z = 0.1
 
+				marker.color.r = color[2]
+				marker.color.g = color[1]
+				marker.color.b = color[0]
+				marker.color.a = 1.0
 
-		#ocena:
-		# velikost luknje
-		# okroglost luknje
-		# enotnost barve
-		# oddaljuenost od obroca
-
-
-		# edges = cv2.Canny(image=depth, threshold1=A, threshold2=B) # Canny Edge Detection
-		# cv2.imshow('Canny Edge Detection', edges)
+				marker.pose.position.x = float(ring_position[2])
+				marker.pose.position.y = float(ring_position[0])
+				marker.pose.position.z = float(ring_position[1])
+				self.marker_pub.publish(marker)
 			
-		cv2.imshow("Mask", mask)
 		cv2.imshow("Image", img_display)
-
-		depth_img = depth_raw.copy()
-		depth_img = (depth_img / np.max(depth_img)) * 255
-		depth_img = np.array(depth_img, dtype=np.uint8)
-		cv2.imshow("Depth", depth_img)
+		# cv2.imshow("Mask", mask)
+		# depth_img = depth_raw.copy()
+		# depth_img = (depth_img / np.max(depth_img)) * 255
+		# depth_img = np.array(depth_img, dtype=np.uint8)
+		# cv2.imshow("Depth", depth_img)
 
 def main():
 	print("OK")
