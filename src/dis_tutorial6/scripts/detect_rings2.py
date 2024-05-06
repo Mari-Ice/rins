@@ -19,6 +19,44 @@ from geometry_msgs.msg import Point
 from geometry_msgs.msg import PointStamped
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 
+def join_contours(contours, data, contour_norm, max_dist):
+	LENGTH = len(contours)
+	status = np.zeros((LENGTH,1))
+	
+	for i,cnt1 in enumerate(contours):
+		mean1 = contour_norm(cnt1, data)
+		
+		if(np.linalg.norm(mean1) < 0.01): #Todo not ikzakli rajt
+			continue
+		
+		x = i
+		if i != LENGTH-1:
+			for j,cnt2 in enumerate(contours[i+1:]):
+				mean2 = contour_norm(cnt2, data)
+				
+				if(np.linalg.norm(mean2) < 0.01): #Todo not ikzakli rajt
+					continue
+
+				x = x+1
+				dist = (np.linalg.norm(mean2-mean1) < max_dist)
+				if dist == True:
+					val = min(status[i],status[x])
+					status[x] = status[i] = val
+				else:
+					if status[x]==status[i]:
+						status[x] = i+1
+	
+	unified = []
+	if(len(status) != 0):
+		maximum = int(status.max())+1
+		for i in range(maximum):
+			pos = np.where(status==i)[0]
+			if pos.size != 0:
+				cont = np.vstack(tuple(contours[i] for i in pos))
+				hull = cv2.convexHull(cont)
+				unified.append(hull)
+	return unified
+
 class sky_mask(Node):
 	def __init__(self):
 		super().__init__('sky_mask')
@@ -59,7 +97,9 @@ class sky_mask(Node):
 		cv2.moveWindow("c2", 830 ,450)
 		cv2.moveWindow("c3", 1245,450)
 
-	def cont_pos(self, cont, a, mask1):
+	def cont_pos(self, cont, data):
+		a, mask1 = data
+
 		x,y,w,h = cv2.boundingRect(cont)
 		
 		mask1 =     mask1[y:y+h,x:x+w].copy()
@@ -88,65 +128,18 @@ class sky_mask(Node):
 		a = a.reshape((height,width,3))
 		hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-		# Ring mask
-		mask1 = np.full((height, width), 0, dtype=np.uint8)
-		mask1[(hsv_img[:,:,1] > 25) & (hsv_img[:,:,2] > 25)] = 255
-		mask1[a[:,:,2] < 0.4] = 0
-		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-		mask1 = cv2.dilate(mask1, kernel)
+		##Mask1 je v nasem primeru en nivo iz depth seperationa
+
+		# # Ring mask
+		# mask1 = np.full((height, width), 0, dtype=np.uint8)
+		# mask1[(hsv_img[:,:,1] > 25) & (hsv_img[:,:,2] > 25)] = 255
+		# mask1[a[:,:,2] < 0.4] = 0
+		# kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+		# mask1 = cv2.dilate(mask1, kernel)
 
 		# Get ring contours
 		contours, hierarchy = cv2.findContours(image=mask1, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
-
-		
-		#cv2.imshow("Image", img)
-
-
-		LENGTH = len(contours)
-		status = np.zeros((LENGTH,1))
-		
-		for i,cnt1 in enumerate(contours):
-			mean1 = self.cont_pos(cnt1, a, mask1)
-			if(np.linalg.norm(mean1) < 0.01):
-				continue
-			
-			x = i
-			if i != LENGTH-1:
-				for j,cnt2 in enumerate(contours[i+1:]):
-					mean2 = self.cont_pos(cnt2, a, mask1)
-					if(np.linalg.norm(mean2) < 0.01):
-						continue
-
-					x = x+1
-					dist = (np.linalg.norm(mean2-mean1) < 0.25)
-					if dist == True:
-						val = min(status[i],status[x])
-						status[x] = status[i] = val
-					else:
-						if status[x]==status[i]:
-							status[x] = i+1
-		
-		unified = []
-		if(len(status) != 0):
-			maximum = int(status.max())+1
-			for i in range(maximum):
-				pos = np.where(status==i)[0]
-				if pos.size != 0:
-					cont = np.vstack(tuple(contours[i] for i in pos))
-					hull = cv2.convexHull(cont)
-					unified.append(hull)
-
-		# cv2.drawContours(img, unified, -1, (0,0,255), 2)
-		# cv2.drawContours(img, contours, -1, (0,255,0), 1)
-		# for i,c in enumerate(contours):
-		# 	dist = self.cont_pos(c, a, mask1)
-		# 	x,y,w,h = cv2.boundingRect(c)
-		# 	cv2.putText(img, f"{dist[0]:.2f}", (x ,y+ 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (x,y), 1)
-		# 	cv2.putText(img, f"{dist[1]:.2f}", (x ,y+12), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (x,y), 1)
-		# 	cv2.putText(img, f"{dist[2]:.2f}", (x ,y+19), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (x,y), 1)
-
-		# cv2.imshow("Image", img)
-		# return	
+		unified = join_contours(contours, [a, mask1], self.cont_pos, 0.25)
 
 		for i,c in enumerate(unified):
 			touches_top = any(0 in y for y in c[:,:,1])

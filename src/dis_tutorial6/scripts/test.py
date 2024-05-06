@@ -27,7 +27,6 @@ from geometry_msgs.msg import Quaternion, PoseStamped, PoseWithCovarianceStamped
 from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
-from sklearn.cluster import DBSCAN
 
 amcl_pose_qos = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -35,14 +34,97 @@ amcl_pose_qos = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-def sign(x):
-	if(x<0):
-		return -1.
-	return 1.	
-def positive_angle(angle):
-	while(angle < 0):
-		angle += 2*math.pi
-	return math.fmod(angle, 2*math.pi)
+
+def separate(depth, dep=0):
+	if(dep > 10): #max depth
+		return []
+
+	gut = np.sort(depth[depth!=0])
+	if(len(gut) < 10):
+		return []
+
+	max_diff = 0
+	max_diff_index = 0
+	for i in range(1,len(gut)):
+		b = gut[i]
+		a = gut[i-1]	
+		diff = b-a
+		if(diff > max_diff):
+			max_diff = diff
+			max_diff_index = i
+
+	m = gut[max_diff_index]
+	m_min = gut[0]
+	m_max = gut[-1]
+
+	if(max_diff < 0.01): #Todo: ugotovit ali je kaksna veza te ocene glede na razdaljo, ipd...
+		mask = np.zeros_like(depth, dtype=np.uint8)
+		mask[depth>0] = 255
+		return [mask]
+
+	#print(max_diff, m_max - m_min)
+
+	g1 = depth.copy()
+	g1[depth<m] = 0
+
+	g2 = depth.copy()
+	g2[depth>=m] = 0
+
+	return separate(g1, dep+1) + separate(g2, dep+1)
+
+def join_contours(contours, data, contour_norm, max_dist):
+	LENGTH = len(contours)
+	status = np.zeros((LENGTH,1))
+	
+	for i,cnt1 in enumerate(contours):
+		mean1 = contour_norm(cnt1, data)
+		
+		if(np.linalg.norm(mean1) < 0.01): #Todo not ikzakli rajt
+			continue
+		
+		x = i
+		if i != LENGTH-1:
+			for j,cnt2 in enumerate(contours[i+1:]):
+				mean2 = contour_norm(cnt2, data)
+				
+				if(np.linalg.norm(mean2) < 0.01): #Todo not ikzakli rajt
+					continue
+
+				x = x+1
+				dist = (np.linalg.norm(mean2-mean1) < max_dist)
+				if dist == True:
+					val = min(status[i],status[x])
+					status[x] = status[i] = val
+				else:
+					if status[x]==status[i]:
+						status[x] = i+1
+	
+	unified = []
+	if(len(status) != 0):
+		maximum = int(status.max())+1
+		for i in range(maximum):
+			pos = np.where(status==i)[0]
+			if pos.size != 0:
+				cont = np.vstack(tuple(contours[i] for i in pos))
+				hull = cv2.convexHull(cont)
+				unified.append(hull)
+	return unified
+
+def cont_pos(cont, data):
+	a, mask1 = data
+
+	x,y,w,h = cv2.boundingRect(cont)
+	
+	mask1 =     mask1[y:y+h,x:x+w].copy()
+	masked_ring_a = a[y:y+h,x:x+w]
+
+	mask1[masked_ring_a[:,:,1]>10000] = 0
+	values = masked_ring_a[mask1==255]
+	
+	if(len(values) == 0):
+		return 0	
+	return np.sum(values) / len(values)
+
 
 class test(Node):
 	def __init__(self):
@@ -72,10 +154,11 @@ class test(Node):
 		cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
 
-		cv2.namedWindow("Depth1", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("Depth2", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("Depth3", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("Depth4", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth0", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth1", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth2", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth3", cv2.WINDOW_NORMAL)
+		# cv2.namedWindow("Depth4", cv2.WINDOW_NORMAL)
 
 		cv2.waitKey(1)
 		cv2.moveWindow('Image',  1   ,1)
@@ -104,47 +187,96 @@ class test(Node):
 		point_step = pc.point_step
 		row_step   = pc.row_step		
 
+		img_display = img.copy()
+
 		xyz = pc2.read_points_numpy(pc, field_names= ("y", "z", "x"))
 		xyz = xyz.reshape((height,width,3))
 
 		mask = np.full((height, width), 0, dtype=np.uint8)
-		mask[(xyz[:,:,1] > -0.15) & (xyz[:,:,1] < 1000)] = 255
+		mask[(xyz[:,:,1] > -0.168) & (xyz[:,:,1] < 1000)] = 255
+		#mask[(xyz[:,:,1] > 0.4) & (xyz[:,:,1] < 1000)] = 255
 
 		depth_raw = self.bridge.imgmsg_to_cv2(depth_raw, "32FC1")
+		depth_raw[depth_raw==np.inf] = 0
+		
 		depth = depth_raw.copy()
-		depth[depth==np.inf] = 0
 		depth[mask!=255] = 0
 		# depth = (depth / np.max(depth)) * 255
 		# depth = np.array(depth, dtype=np.uint8)
 
-		gut = np.sort(depth[depth!=0])
-		if(len(gut) > 0):
-			max_diff = 0
-			max_diff_index = 0
-			for i in range(1,len(gut)):
-				b = gut[i]
-				a = gut[i-1]	
-				diff = b-a
-				if(diff > max_diff):
-					max_diff = diff
-					max_diff_index = i
+		#nastavi vse slike na belo
+		mpty = np.full((height, width), 255, dtype=np.uint8)
+		# for i in range(10):
+		# 	cv2.imshow(f"Depth{i}", mpty)
 
-			m = gut[max_diff_index]
-			m_min = gut[0]
-			m_max = gut[-1]
+		masks = separate(depth) #okej tole torej dela kjut razdeli glede na globino. To bi torej lahko blo plug'n play v detect rings2?
+		for j,m in enumerate(masks):
+			#cv2.imshow(f"Depth{i}", m)
+			mask1 = m
+			#kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+			#mask = cv2.dilate(mask1, kernel)
+			mask = mask1.copy()
+			cv2.floodFill(mask, None, (int(width/2),int(height-1)), 255) 
+			mask = 255-mask
+			kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
+			#mask = cv2.dilate(mask, kernel) #za spodnjo kamero
+			#kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+			mask = cv2.dilate(mask, kernel)
+			mask[xyz[:,:,1] > 1000] = 0
 
-			g1 = depth.copy()
-			print(max_diff, m_max - m_min)
-			#if(m_max - m_min < 100):
-			if(max_diff < 0.01):
-				cv2.imshow("Depth1", g1)
-			else:
-				g1[depth<m] = 0
-				g2 = depth.copy()
-				g2[depth>=m] = 0
-				cv2.imshow("Depth1", g1)
-				cv2.imshow("Depth2", g2)
+			#cv2.imshow(f"Mask{j}", mask)
 
+			contours, hierarchy = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
+			for i,c in enumerate(contours):
+				x,y,w,h = cv2.boundingRect(c)
+				if(w < 5 or h < 5):
+					continue
+
+				x1 = max(0,x-0)
+				y1 = max(0,y-0)
+					
+				x2 = min(width , x+w+0)
+				y2 = min(height, y+h+0)
+
+				cx = int((x1 + x2)/2)
+				cy = int((y1 + y2)/2)
+
+				circle_img  = img[y1:y2,x1:x2].copy()
+				circle_mask = mask1[y1:y2,x1:x2]
+				circle_img[circle_mask==0] = (0,0,0)
+				# cv2.imshow(f"Circle{j}_{i}", circle_img)
+
+				color = circle_img.sum(axis=(0,1))
+				color -= min(color)
+
+				color_max = max(color)
+				if(color_max == 0):
+					continue
+
+				color = (color / color_max)
+				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
+				color = (color*255)
+				color = [int(color[0]), int(color[1]), int(color[2])]
+
+				# print(f"hue: {hue}, color: {color}")
+				
+				color_index = int(((hue + 60)%360) / 120)
+				color_names = ["red", "green", "blue"]
+				color_name = color_names[color_index]
+				# print(f"color: {color_name}")
+
+				cv2.rectangle(img_display, (x1, y1), (x2, y2), color, 1)
+				cv2.putText(img_display, color_name, (cx ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+
+
+
+
+
+		#ocena:
+		# velikost luknje
+		# okroglost luknje
+		# enotnost barve
 
 		#print(f"gutl: {len(gut)} uniq: {len(np.unique(gut))}, gut: {gut}")
 
@@ -155,8 +287,12 @@ class test(Node):
 		# cv2.imshow('Canny Edge Detection', edges)
 			
 		cv2.imshow("Mask", mask)
-		cv2.imshow("Image", img)
-		#cv2.imshow("Depth", depth)
+		cv2.imshow("Image", img_display)
+
+		depth_img = depth_raw.copy()
+		depth_img = (depth_img / np.max(depth_img)) * 255
+		depth_img = np.array(depth_img, dtype=np.uint8)
+		cv2.imshow("Depth", depth_img)
 
 def main():
 	print("OK")

@@ -44,6 +44,7 @@ class ArmMoverAction(Node):
         self.arm_poses = {'look_for_parking':[0.,0.4,1.5,1.2],
                           'look_for_parking2' : [0.0, -0.053, 1.0756, 2.1193],
                           'look_for_qr':[0.,0.6,0.5,2.0],
+                          'look_for_rings':[0.0, -0.053, 1.0756, 0.5],
                           'garage':[0.,-0.45,2.8,-0.8],
                           'up':[0.,0.,0.,0.],
                           'manual':None,
