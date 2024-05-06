@@ -27,7 +27,7 @@ from geometry_msgs.msg import Quaternion, PoseStamped, PoseWithCovarianceStamped
 from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
-
+from task2.msg import RingInfo
 
 
 amcl_pose_qos = QoSProfile(
@@ -115,25 +115,14 @@ def join_contours(contours, data, contour_norm, max_dist):
 				unified.append(hull)
 	return unified
 
-def cont_pos(cont, data):
-	a, mask1 = data
-
-	x,y,w,h = cv2.boundingRect(cont)
-	
-	mask1 =	 mask1[y:y+h,x:x+w].copy()
-	masked_ring_a = a[y:y+h,x:x+w]
-
-	mask1[masked_ring_a[:,:,1]>10000] = 0
-	values = masked_ring_a[mask1==255]
-	
-	if(len(values) == 0):
-		return 0	
-	return np.sum(values) / len(values)
+# def cont_pos(cont, data):
+# 	a, mask1 = data
+# 
 
 
-class test(Node):
+class RingDetection(Node):
 	def __init__(self):
-		super().__init__('floor_mask')
+		super().__init__('ring_detection')
 
 		self.declare_parameters(
 			namespace='',
@@ -267,8 +256,6 @@ class test(Node):
 				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
 				color = (color*255)
 				color = [int(color[0]), int(color[1]), int(color[2])]
-
-				# print(f"hue: {hue}, color: {color}")
 				
 				color_index = int(((hue + 60)%360) / 120)
 				color_names = ["red", "green", "blue"]
@@ -278,8 +265,26 @@ class test(Node):
 				cv2.rectangle(img_display, (x1, y1), (x2, y2), color, 1)
 				cv2.putText(img_display, color_name, (cx ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
+				
+				#Tu dobis krog torej velikost kroga / luknje
+                ring_points = xyz[circle_img != (0,0,0)]
+				colors_set = circle_img[circle_img != (0,0,0)]
+                ring_position = sum(ring_points) / len(ring_points) #TODO: transform ring point to base_link tf
 
-
+				q_size = min(w,h) / min(width,height)
+				q_colors = math.exp(-0.1*np.std(colors_set[:]))
+				q_okroglost = math.exp(-0.1*(1-max(w,h)/min(w,h)**2))
+                q_distance = math.exp(-0.1*(0.15 - np.linalg.norm(ring_position))**2)
+                
+                q = min(q_size, q_okroglost, q_colors, q_distance)
+                #TO posljemo
+				cv2.putText(img_display, f"{std}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
+                
+                msg = RingInfo()
+                msg.q = q
+                msg.color = color
+                msg.position = ring_position
+                ##TODO pusblish msg
 
 
 
@@ -287,8 +292,7 @@ class test(Node):
 		# velikost luknje
 		# okroglost luknje
 		# enotnost barve
-
-		#print(f"gutl: {len(gut)} uniq: {len(np.unique(gut))}, gut: {gut}")
+		# oddaljuenost od obroca
 
 
 		# edges = cv2.Canny(image=depth, threshold1=A, threshold2=B) # Canny Edge Detection
@@ -305,7 +309,7 @@ class test(Node):
 def main():
 	print("OK")
 	rclpy.init(args=None)
-	node = test()
+	node = RingDetection()
 	rclpy.spin(node)
 	node.destroy_node()
 	rclpy.shutdown()
