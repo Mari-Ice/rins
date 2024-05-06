@@ -25,16 +25,22 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL 1.10 REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS} include)
 link_directories(${PCL_LIBRARY_DIRS})
 # add_definitions(${PCL_DEFINITIONS})
 
-set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions)
+set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions rosidl_default_generators)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/Color.srv"
+)
 
 install(PROGRAMS
   scripts/detect_rings_depth.py
   scripts/autonomous_explorer.py
+  scripts/color_talker.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

@@ -48,7 +48,8 @@ class ArmMoverAction(Node):
                           'garage':[0.,-0.45,2.8,-0.8],
                           'up':[0.,0.,0.,0.],
                           'manual':None,
-                          'setp':None
+                          'setp':None,
+                          'setpf':None
                          }
 
         self.get_logger().info(f"Initialized the Arm Mover node! Waiting for commands...")
@@ -67,7 +68,7 @@ class ArmMoverAction(Node):
         #print(f"cmd_str: {command_string}, cmd: {command}") #neki
         if command is None:
            cmd_name = command_string.split(':')[0]
-           if(cmd_name=="setp"):
+           if(cmd_name=="setp" or cmd_name == "setpf"):
                x,y = eval(command_string.split(':')[1])
                d = math.sqrt(x*x+y*y)
                arm_length = 0.25
@@ -78,7 +79,12 @@ class ArmMoverAction(Node):
                    theta = math.acos(q) 
                    fi0 = math.atan2(y,x)
                    fi1 = fi0+theta
-                   pp = [0.0, math.pi/2 - fi1, 2*theta, math.pi/2 + fi0 - theta]
+                   pp = []
+                   if(cmd_name=="setp"):
+                       pp = [0.0, math.pi/2 - fi1, 2*theta, math.pi/2 + fi0 - theta]
+                   else:
+                       pp = [0.0, math.pi/2 - fi1, 2*theta, fi0 - theta]
+                       
                    point.positions = pp
                    print(f"cmd setp: {pp}")
            else:
