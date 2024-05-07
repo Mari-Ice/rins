@@ -14,6 +14,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
 from task2.srv import Color
+from task2.msg import Waypoint
 from std_srvs.srv import Trigger
 import cv2
 import numpy as np
@@ -41,13 +42,12 @@ class MapGoals(Node):
         self.keypoints = []
         self.keypoint_markers = MarkerArray()
         self.last_keypoint = [0,0,0]
-        self.face_keypoints = []
+        self.priority_keypoints = []
         self.keypoint_index = 0
         self.forward = True
         self.future = None
         self.future_color = None
         self.face_count = 0
-        self.ring_keypoints = []
         self.ring_count = { # 0: red, 1: green, 2: blue, 3: black
             0: 0,
             1: 0,
@@ -61,10 +61,10 @@ class MapGoals(Node):
         timer_period = 1/timer_frequency
 
         # Functional variables
-        self.pending_goal = True
+        self.enable_navigation = True
         self.result_future = None
         self.currently_navigating = False
-        self.currently_greeting = False
+        self.currently_navigating_priority = False
         self.clicked_x = None
         self.clicked_y = None
         self.ros_occupancy_grid = None
@@ -80,12 +80,30 @@ class MapGoals(Node):
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
         self.rings = self.create_subscription(MarkerArray, '/ring', self.add_ring_callback, 10)
+        self.final_keypoint_sub = self.create_subscription(Waypoint, '/final_keypoint', self.final_waypoint_callback, 10)
+        self.priority_keypoint_sub = self.create_subscription(Waypoint, '/priority_keypoint', self.priority_waypoint_callback, 10)
         # Create a timer, to do the main work.
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
         self.say_color = self.create_client(Color, '/say_color')
         self.say_hello = self.create_client(Trigger, '/say_hello')
         self.keypoint_publisher = self.create_publisher(MarkerArray, '/keypoints', QoSReliabilityPolicy.BEST_EFFORT)
+        
+        # Enable and disable navigation
+        self.enable_navigation_sub = self.create_service(Trigger, '/enable_navigation', self.enable_navigation_callback)
+        self.disable_navigation_sub = self.create_service(Trigger, '/disable_navigation', self.disable_navigation_callback)
+
+    def enable_navigation_callback(self, request, response):
+        self.enable_navigation = True
+        response.success = True
+        response.message = "Navigation enabled."
+        return response
+    
+    def disable_navigation_callback(self, request, response):
+        self.enable_navigation = False
+        response.success = True
+        response.message = "Navigation disabled."
+        return response
 
     def map_callback(self, msg):
         self.get_logger().info(f"Read a new Map (Occupancy grid) from the topic.")
@@ -133,9 +151,9 @@ class MapGoals(Node):
         return new_kp
 
     def get_next_keypoint(self):
-        if(len(self.face_keypoints) > 0):
-            self.currently_greeting = True
-            return self.face_keypoints.pop(0)
+        if(len(self.priority_keypoints) > 0):
+            self.currently_navigating_priority = True
+            return self.priority_keypoints.pop(0)
         
         if(len(self.keypoints) == 0):
             print("waiting for keypoints")
@@ -158,6 +176,35 @@ class MapGoals(Node):
         
         self.last_keypoint = new_kp
         return new_kp
+    
+    def final_waypoint_callback(self, waypoint: Waypoint):
+        # stop following the waypoints, move to the final waypoint and exit
+        self.stop_following_waypoints()
+
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = 'map'
+        goal_pose.header.stamp = self.get_clock().now().to_msg()
+        goal_pose.pose.x = waypoint.x
+        goal_pose.pose.y = waypoint.y
+
+        # TODO: orientation
+
+        self.go_to_pose(goal_pose)
+
+        rclpy.shutdown()
+        exit(0)
+
+    def priority_waypoint_callback(self, waypoint: Waypoint):
+        # stop following the waypoints, move to the priority waypoint
+
+        self.currently_navigating = True
+
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = 'map'
+        goal_pose.header.stamp = self.get_clock().now().to_msg()
+        goal_pose.pose = marker.pose
+
+        self.go_to_pose(goal_pose)
 
     def timer_callback(self): 
         if STOP_AFTER_THREE and self.face_count >= 3:
@@ -168,7 +215,7 @@ class MapGoals(Node):
         if self.future and self.future.done():
             result = self.future.result()
             self.get_logger().info(f"greeting result: {result}")
-            self.currently_greeting = False
+            self.currently_navigating_priority = False
             self.future = None
             self.face_count += 1
 
@@ -179,7 +226,7 @@ class MapGoals(Node):
             self.ring_count[result.color] = self.ring_count[result.color] + 1
         
         # If the robot is not currently navigating to a goal, and there is a goal pending
-        if not self.currently_navigating and self.pending_goal and not self.currently_greeting:
+        if self.enable_navigation and not self.currently_navigating:
             keypoint = self.get_next_keypoint()
 
             if keypoint is not None:
@@ -225,11 +272,18 @@ class MapGoals(Node):
         
         # Apply rotation
         return x, y
+    
+    def stop_following_waypoints(self):
+        self.currently_navigating = False
+
+        while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().info("'NavigateToPose' action server not available, waiting...")
+
+        self.nav_to_pose_client._cancel_goal_async()
 
     def go_to_pose(self, pose):
         """Send a `NavToPose` action request."""
         self.currently_navigating = True
-        self.pending_goal = False
 
         while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().info("'NavigateToPose' action server not available, waiting...")
@@ -249,21 +303,17 @@ class MapGoals(Node):
 
         if not goal_handle.accepted:
             self.get_logger().error('Goal was rejected!')
-            self.currently_greeting = False
+            self.currently_navigating = False
             return	
 
-        self.currently_navigating = True
-        self.pending_goal = False
         self.result_future = goal_handle.get_result_async()
         self.result_future.add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
-        if(self.currently_greeting):
+        if(self.currently_navigating_priority):
             self.greet()
 
         self.currently_navigating = False
-        # self.pending_goal = False
-        self.pending_goal = True
         status = future.result().status
 
         if status != GoalStatus.STATUS_SUCCEEDED:
@@ -277,8 +327,6 @@ class MapGoals(Node):
             return
          
         self.get_logger().info(f'Goal reached (according to Nav2).')
-        
-        # self.pending_goal = True
 
     def greet(self):
         req = Trigger.Request()
@@ -302,7 +350,7 @@ class MapGoals(Node):
         z = marker.pose.orientation.z
         w = marker.pose.orientation.w
         _, _, theta = euler_from_quaternion((x, y, z, w))
-        self.face_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
+        self.priority_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
 
     def calculate_keypoints(self):
         # image = self.map_np

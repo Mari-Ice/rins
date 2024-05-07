@@ -37,6 +37,7 @@ set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Color.srv"
   "msg/RingInfo.msg"
+  "msg/Waypoint.msg"
 )
 
 install(PROGRAMS
