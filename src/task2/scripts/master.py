@@ -31,6 +31,7 @@ qos_profile = QoSProfile(
 
 """
 	Vsi nodi publish-ajo svoje podatke, skupaj z neko kvaliteto podatkov
+"""
 
 class MasterState(Enum):
 	INIT = 0
