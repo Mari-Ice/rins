@@ -197,6 +197,9 @@ class detect_faces(Node):
 			if(np.linalg.norm(d2-d1) < 0.05):
 				continue
 
+
+		
+			#print(data.header.stamp, rclpy.time.Time())
 			#zdej pa te tocke transformiramo v globalne (map) koordinate
 			time_now = rclpy.time.Time()
 			timeout = Duration(seconds=10.0)

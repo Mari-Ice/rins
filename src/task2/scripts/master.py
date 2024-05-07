@@ -20,8 +20,6 @@ from geometry_msgs.msg import PointStamped, Vector3, Pose
 from visualization_msgs.msg import Marker, MarkerArray
 from task2.msg import RingInfo
 
-
-
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 		  reliability=QoSReliabilityPolicy.RELIABLE,
@@ -52,7 +50,6 @@ qos_profile = QoSProfile(
 
 	Torej ko dobis msg, poisces najblizjo razdaljo med vse best_msgi in med vsemi last_msgi za vse najdene obroce in za vse potencialne obroce.
 
-
 """
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
@@ -70,27 +67,93 @@ def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker.pose.position.z = float(position[2])
 	return marker
 
-
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
 
-		self.ring_sub = self.create_subscription(RingInfo, "/rings_info", self.rings_callback, qos_profile_sensor_data)
+		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_marker_pub = self.create_publisher(Marker, "/rings_marker", QoSReliabilityPolicy.BEST_EFFORT)
-		self.cnt = 0
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
+
+		self.found_rings = []
+		self.potential_rings = []
+
 		print("OK")
+		return
 
-	def rings_callback(self, rings_info):
-		marker = create_marker_point(rings_info.position, rings_info.color)
-		marker.id = self.cnt
-		marker.header.frame_id = "/top_camera_link"
-		marker.header.stamp = rclpy.time.Time().to_msg()
+	def add_new_ring(self, ring_info):
+		if(ring_info.q > 0.5):
+			self.found_rings.append([ring_info, ring_info])
 
-		self.ring_marker_pub.publish(marker)	
+			#Zdej pa zbrisemo vse potencialne v blizini
+			for i,ri in enumerate(self.potential_rings):
+				dist = np.linalg.norm(np.array(ri[0].position) - np.array(ring_info.position))
+				if(dist < 0.4):
+					self.potential_rings.remove(ri)	
+		else:
+			self.potential_rings.append([ring_info, ring_info])
+	def merge_ring_with_target(self, target, ring):
+		if(ring.q > target[0].q):
+			return [ring, ring]
+		return [target[0], ring]
 		
-		self.cnt = (self.cnt + 1) % 100
+
+	def ring_callback(self, ring_info):
+		#okej, najprej najdeno najmanjso razdaljo do kaksnega obroca.	
+
+		min_dist_to_found = 1001
+		min_found_index = -1
+
+		min_dist_to_potential = 1000
+		min_potential_index = -1
+		
+		for i,fr in enumerate(self.found_rings):
+			fr_best, fr_last = fr
+			
+			dist = np.linalg.norm(np.array(fr_best.position) - np.array(ring_info.position))
+			if(dist < min_dist_to_found):
+				min_dist_to_found = dist
+				min_found_index = i
+			
+			dist = np.linalg.norm(np.array(fr_last.position) - np.array(ring_info.position))
+			if(dist < min_dist_to_found):
+				min_dist_to_found = dist
+				min_found_index = i
+
+		for i,fr in enumerate(self.potential_rings):
+			fr_best, fr_last = fr
+			
+			dist = np.linalg.norm(np.array(fr_best.position) - np.array(ring_info.position))
+			if(dist < min_dist_to_potential):
+				min_dist_to_potential = dist
+				min_potential_index = i
+			
+			dist = np.linalg.norm(np.array(fr_last.position) - np.array(ring_info.position))
+			if(dist < min_dist_to_potential):
+				min_dist_to_potential = dist
+				min_potential_index = i
+
+		min_dist = min(min_dist_to_potential, min_dist_to_found)	
+		print(f"min_dist: {min_dist}")
+		print(f"fund_rings: {len(self.found_rings)}")
+
+		if(min_dist > 0.4): #TODO, threshold, glede na kvaliteto
+			self.add_new_ring(ring_info)	
+		else:
+			if(min_dist_to_potential < min_dist_to_found):
+				self.potential_rings[min_potential_index] = self.merge_ring_with_target(self.potential_rings[min_potential_index], ring_info)
+			else:
+				self.found_rings[min_found_index] = self.merge_ring_with_target(self.found_rings[min_found_index], ring_info)
+			
+		#Na koncu posljes posodobljene markerje najdenih ringov.
+		for i, r in enumerate(self.found_rings):
+			marker = create_marker_point(r[0].position, r[0].color)
+			marker.id = i
+			marker.header.frame_id = "/map"
+			marker.header.stamp = rclpy.time.Time().to_msg()
+			self.ring_marker_pub.publish(marker)	
+		return
 
 
 def main():
@@ -98,6 +161,7 @@ def main():
 	rd_node = MasterNode()
 	rclpy.spin(rd_node)
 	cv2.destroyAllWindows()
+	return
 
 
 if __name__ == '__main__':

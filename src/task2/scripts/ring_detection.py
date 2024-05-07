@@ -20,6 +20,7 @@ from tf2_ros.transform_listener import TransformListener
 from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from visualization_msgs.msg import Marker
+from rosgraph_msgs.msg import Clock
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import PointStamped
@@ -109,7 +110,7 @@ class RingDetection(Node):
 		self.ts.registerCallback(self.rgb_pc_callback)
 
 		#msg publisher
-		self.rings_info_pub = self.create_publisher(RingInfo, "/rings_info", QoSReliabilityPolicy.BEST_EFFORT)
+		self.ring_info_pub = self.create_publisher(RingInfo, "/ring_info", QoSReliabilityPolicy.BEST_EFFORT)
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
@@ -137,10 +138,17 @@ class RingDetection(Node):
 		cv2.setTrackbarPos("A", "Image", 100)
 		cv2.setTrackbarPos("B", "Image", 200)
 
+
+		self.start_time = time.time()
+
 	def nothing(self, data):
 		pass
 
 	def rgb_pc_callback(self, rgb, pc, depth_raw):
+
+		if((time.time() - self.start_time) < 15):
+			return
+
 		cv2.waitKey(1)
 		img = self.bridge.imgmsg_to_cv2(rgb, "bgr8")
 		height	 = pc.height
@@ -261,8 +269,21 @@ class RingDetection(Node):
 				msg = RingInfo()
 				msg.q = q
 				msg.color = [color[2], color[1], color[0]]
-				msg.position = [float(ring_position[2]), float(ring_position[0]), float(ring_position[1]) ]
-				self.rings_info_pub.publish(msg)
+		
+				#Zadevo je treba prej transformirat v globalne koordiante.
+				time_now = rclpy.time.Time()
+				timeout = Duration(seconds=0.5)
+				transform = self.tf_buffer.lookup_transform("map", "top_camera_link", time_now, timeout)	
+
+				position_point = PointStamped() #robot global pos
+				position_point.header.frame_id = "/map"
+				position_point.header.stamp = rgb.header.stamp
+				position_point.point.x = float(ring_position[2])
+				position_point.point.y = float(ring_position[0])
+				position_point.point.z = float(ring_position[1])
+				pp_global = tfg.do_transform_point(position_point, transform)
+				msg.position = [float(pp_global.point.x), float(pp_global.point.y), float(pp_global.point.z)]
+				self.ring_info_pub.publish(msg)
 
 		cv2.imshow("Image", img_display)
 
@@ -270,6 +291,7 @@ def main():
 	print("OK")
 	rclpy.init(args=None)
 	node = RingDetection()
+	
 	rclpy.spin(node)
 	node.destroy_node()
 	rclpy.shutdown()
