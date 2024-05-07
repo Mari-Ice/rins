@@ -10,6 +10,7 @@ from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import Quaternion, PoseStamped
 
 from visualization_msgs.msg import Marker, MarkerArray
+from task2.msg import Waypoint
 
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
@@ -26,6 +27,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 import math
 import numpy as np
+import os
 
 STOP_AFTER_THREE = True
 
@@ -54,6 +56,8 @@ class MapGoals(Node):
             2: 0,
             3: 0,
         }
+        
+        self.enable_navigation = False
 
         # Basic ROS stuff
         timer_frequency = 10
@@ -88,10 +92,22 @@ class MapGoals(Node):
         self.say_color = self.create_client(Color, '/say_color')
         self.say_hello = self.create_client(Trigger, '/say_hello')
         self.keypoint_publisher = self.create_publisher(MarkerArray, '/keypoints', QoSReliabilityPolicy.BEST_EFFORT)
-        
-        # Enable and disable navigation
-        self.enable_navigation_sub = self.create_service(Trigger, '/enable_navigation', self.enable_navigation_callback)
-        self.disable_navigation_sub = self.create_service(Trigger, '/disable_navigation', self.disable_navigation_callback)
+
+        self.priority_waypoint_sub = self.create_subscription(Waypoint, '/priority_waypoint', self.priority_waypoint_callback, qos_profile)
+        # self.final_waypoint_sub = self.create_subscription(Waypoint, '/final_waypoint', self.final_waypoint_callback, qos_profile)
+
+        self.enable_navigation_service = self.create_service(Trigger, '/enable_navigation', self.enable_navigation_callback)
+        self.disable_navigation_service = self.create_service(Trigger, '/disable_navigation', self.disable_navigation_callback)
+
+    def priority_waypoint_callback(self, waypoint : Waypoint):
+        self.get_logger().info(f"Received priority waypoint: {waypoint}")
+        # goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
+        self.face_keypoints.append([waypoint.x, waypoint.y, 0])
+
+    def final_waypoint_callback(self, waypoint : Waypoint):
+        self.get_logger().info(f"Received final waypoint: {waypoint}")
+        # goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
+        self.face_keypoints.append([waypoint.x, waypoint.y, 0])
 
     def enable_navigation_callback(self, request, response):
         self.enable_navigation = True
@@ -226,7 +242,7 @@ class MapGoals(Node):
             self.ring_count[result.color] = self.ring_count[result.color] + 1
         
         # If the robot is not currently navigating to a goal, and there is a goal pending
-        if self.enable_navigation and not self.currently_navigating:
+        if self.enable_navigation and not self.currently_navigating and self.pending_goal and not self.currently_greeting:
             keypoint = self.get_next_keypoint()
 
             if keypoint is not None:
@@ -310,8 +326,9 @@ class MapGoals(Node):
         self.result_future.add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
-        if(self.currently_navigating_priority):
-            self.greet()
+        if(self.currently_greeting):
+            # self.greet()
+            self.currently_greeting = False
 
         self.currently_navigating = False
         status = future.result().status
@@ -354,7 +371,7 @@ class MapGoals(Node):
 
     def calculate_keypoints(self):
         # image = self.map_np
-        image = cv2.imread("/home/theta/colcon_ws/rins/src/dis_tutorial3/maps/map.pgm")
+        image = cv2.imread(os.path.expanduser('~/colcon_ws/rins/rins/src/dis_tutorial3/maps/map.pgm'))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         original_image = image.copy()
 
