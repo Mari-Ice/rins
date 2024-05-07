@@ -64,7 +64,6 @@ class park(Node):
 		self.bridge = CvBridge()
 		self.scan = None
 
-
 		self.initial_pose_received = False
 		# self.position = None
 		# self.rotation = None
@@ -99,8 +98,8 @@ class park(Node):
 		cv2.moveWindow('Image',  1   ,1)
 		cv2.moveWindow('Mask',   415 ,1)
 
-		cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
-		cv2.setTrackbarPos("A", "Image", 133)
+		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
+		# cv2.setTrackbarPos("A", "Image", 133)
 
 	def park_cmd_callback(self, data):
 		print(f"park_cmd_callback: {data}")
@@ -205,7 +204,7 @@ class park(Node):
 		xyz = pc2.read_points_numpy(pc, field_names= ("y", "z", "x"))
 		xyz = xyz.reshape((height,width,3))
 
-		thresh = 5*cv2.getTrackbarPos("A", 'Image') / 1000
+		thresh = 0.665
 		mask = np.full((height, width), 0, dtype=np.uint8)
 		mask[(img[:,:,:] < 10).all(axis=2)] = 255
 		mask[xyz[:,:,2] < thresh] = (0)
