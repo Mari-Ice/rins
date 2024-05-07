@@ -33,7 +33,7 @@ qos_profile = QoSProfile(
 
 	Ko vidis ring z dovolj veliko kvaliteto, ki ga se nisi videl (grouping bz position) reces njegovo barvo
 	Ko vidis vsaj tri obroce in si ze videl zelenega gres do njega da se parkiras, ce zeleniega se nisi videl se voziz okoli in ga isces
-	Potem gres do polozaja kjer je zelen in prizges parking node.	
+	Potem gres do polozaja kjer je zelen in prizges parking node. 
 
 	Za vsako ko dobis ring msg, pogledas najblizje kateremu ze znanemu si, slabsa kot je kvaliteta, daljso razdaljo dovolis.
 	Ce je kvaliteta slaba: 
