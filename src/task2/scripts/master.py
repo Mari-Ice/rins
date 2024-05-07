@@ -92,6 +92,8 @@ class MasterNode(Node):
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
+		self.park_pub = self.create_publisher(String, "/park_cmd", QoSReliabilityPolicy.BEST_EFFORT)
+
 		self.green_ring_found = False
 		self.ring_count = 0	
 		self.rings = []
@@ -115,7 +117,7 @@ class MasterNode(Node):
 		goal_pose.pose.position.y = float(y)
 		goal_pose.pose.orientation = Quaternion(x=0.,y=0.,z=0.,w=1.)
 		return goal_pose
-	
+
 	def go_to_pose(self, x,y): #nav2
 		pose = self.create_nav2_goal_msg(x,y)
 
@@ -156,7 +158,8 @@ class MasterNode(Node):
 		if(old_state == MasterState.MOVING_TO_GREEN):
 			self.setup_camera_for_parking()
 			self.t1 = m_time
-		
+		if(new_state == MasterState.PARKING):
+			self.start_parking()
 
 	def on_update(self):
 		self.send_ring_markers()
@@ -228,6 +231,13 @@ class MasterNode(Node):
 		msg.data = "look_for_parking2"
 		self.arm_pos_pub.publish(msg)
 		return
+
+	def start_parking(self):
+		msg = String()
+		msg.data = "start_park"
+		self.park_pub.publish(msg)
+		return
+
 
 	#TODO: to se da implementirat dosti lepse in hitrejse, ...
 	#TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...

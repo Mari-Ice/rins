@@ -52,7 +52,7 @@ def separate(depth, dep=0):
 	if(len(gut) < 10):
 		return []
 
-	if(dep > 10): #max depth
+	if(dep > 7): #max depth
 		mask = np.zeros_like(depth, dtype=np.uint8)
 		mask[depth>0] = 255
 		return [mask]
@@ -133,8 +133,8 @@ class RingDetection(Node):
 		cv2.moveWindow('Depth3',   830 ,500)
 		cv2.moveWindow('Depth4',   1245 ,500)
 
-		cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
-		cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
+		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
+		# cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
 		
 		cv2.setTrackbarPos("A", "Image", 100)
 		cv2.setTrackbarPos("B", "Image", 200)
@@ -147,7 +147,7 @@ class RingDetection(Node):
 
 	def rgb_pc_callback(self, rgb, pc, depth_raw):
 
-		if((time.time() - self.start_time) < 5):
+		if((time.time() - self.start_time) < 3):
 			return
 
 		cv2.waitKey(1)
@@ -156,49 +156,37 @@ class RingDetection(Node):
 		width	  = pc.width
 		point_step = pc.point_step
 		row_step   = pc.row_step		
-
-		img_display = img.copy()
-
 		xyz = pc2.read_points_numpy(pc, field_names= ("y", "z", "x"))
 		xyz = xyz.reshape((height,width,3))
 
-		mask = np.full((height, width), 0, dtype=np.uint8)
-		mask[(xyz[:,:,1] > -0.162) & (xyz[:,:,1] < 1000)] = 255
-		#mask[(xyz[:,:,1] > 0.4) & (xyz[:,:,1] < 1000)] = 255
-
-
-		A = 2*(cv2.getTrackbarPos("A", 'Image') / 1000) - 1
-		# B = 2*(cv2.getTrackbarPos("B", 'Image') / 1000) - 1
-		img_display[(xyz[:,:,1] <= A)] = (0,0,0) ##TEGA DEJ
-
+		#obrezemo vse slike, da je lazje za racunat.
 		depth_raw = self.bridge.imgmsg_to_cv2(depth_raw, "32FC1")
 		depth_raw[depth_raw==np.inf] = 0
+
+		cut_y1 = 30
+		cut_y2 = height - 60
+		img = img[cut_y1:cut_y2,:,:]
+		xyz = xyz[cut_y1:cut_y2,:,:]
+		depth_raw = depth_raw[cut_y1:cut_y2,:]
+		height = height - 90
+
+		img_display = img.copy()
+		mask = np.full((height, width), 0, dtype=np.uint8)
+		mask[(xyz[:,:,1] > -0.162) & (xyz[:,:,1] < 1000)] = 255
 		
 		depth = depth_raw.copy()
 		depth[mask!=255] = 0
-		# depth = (depth / np.max(depth)) * 255
-		# depth = np.array(depth, dtype=np.uint8)
-
-		#nastavi vse slike na belo
-		mpty = np.full((height, width), 255, dtype=np.uint8)
-		# for i in range(10):
-		#	 cv2.imshow(f"Depth{i}", mpty)
 
 		masks = separate(depth) #okej tole torej dela kjut razdeli glede na globino. To bi torej lahko blo plug'n play v detect rings2?
 		for j,m in enumerate(masks):
 			#cv2.imshow(f"Depth{j}", m)
 			mask1 = m
-			#kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-			#mask = cv2.dilate(mask1, kernel)
 			mask = mask1.copy()
 			cv2.floodFill(mask, None, (int(width/2),int(height-1)), 255) 
 			mask = 255-mask
 			kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
-			#mask = cv2.dilate(mask, kernel) #za spodnjo kamero
-			#kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
 			mask = cv2.dilate(mask, kernel)
 			mask[xyz[:,:,1] > 1000] = 0
-
 			#cv2.imshow(f"Mask{j}", mask)
 
 			contours, hierarchy = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
