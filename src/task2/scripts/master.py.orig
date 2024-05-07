@@ -29,8 +29,6 @@ qos_profile = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-"""
-	Vsi nodi publish-ajo svoje podatke, skupaj z neko kvaliteto podatkov
 
 class MasterState(Enum):
 	INIT = 0

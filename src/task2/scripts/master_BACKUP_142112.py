@@ -29,9 +29,8 @@ qos_profile = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-"""
-	Vsi nodi publish-ajo svoje podatke, skupaj z neko kvaliteto podatkov
 
+<<<<<<< HEAD
 class MasterState(Enum):
 	INIT = 0
 	CAMERA_SETUP_FOR_EXPLORATION = 1
@@ -40,6 +39,30 @@ class MasterState(Enum):
 	CAMERA_SETUP_FOR_PARKING = 4
 	PARKING = 5
 	DONE = 6
+=======
+	Ko vidis ring z dovolj veliko kvaliteto, ki ga se nisi videl (grouping bz position) reces njegovo barvo
+	Ko vidis vsaj tri obroce in si ze videl zelenega gres do njega da se parkiras, ce zeleniega se nisi videl se voziz okoli in ga isces
+	Potem gres do polozaja kjer je zelen in prizges parking node. 
+
+	Za vsako ko dobis ring msg, pogledas najblizje kateremu ze znanemu si, slabsa kot je kvaliteta, daljso razdaljo dovolis.
+	Ce je kvaliteta slaba: 
+		* Ce ni nobenega blizu, ga dodas v seznam potencialnih obrocov.
+		* Ce je kateri blizu, ga dodas pod njega
+	Ce je kvaliteta dobra:
+		* Ce je kateri ze zelo blizu, ga dodas pod njega
+		* Ce je kateri srednje dalec, ustvaris not najden obroc
+		* V vsakem primeru, odstranis potencialne obroce v blizini.
+
+	Torej za vsak detected in potencialen ring hranis:
+		best_quality_msg, last_received_msg
+		best_quality se uporablja za poslijanje pozicije v rviz2, 
+		last_received_msg se uporablja, za clustering, ker medtem ko se rebot premika, je lahko njegova pozicija nestabilna,
+		zato rajsi uporabljamo clustering relativno na zadnji dober msg in na best_quality msg.
+
+	Torej ko dobis msg, poisces najblizjo razdaljo med vse best_msgi in med vsemi last_msgi za vse najdene obroce in za vse potencialne obroce.
+
+"""
+>>>>>>> 9e02d1afbe5b348aac9f5e4282c7e54fef7b8041
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker = Marker()

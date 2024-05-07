@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-import time
 import rclpy
 from rclpy.node import Node
 import cv2
@@ -32,14 +31,28 @@ qos_profile = QoSProfile(
 """
 	Vsi nodi publish-ajo svoje podatke, skupaj z neko kvaliteto podatkov
 
-class MasterState(Enum):
-	INIT = 0
-	CAMERA_SETUP_FOR_EXPLORATION = 1
-	EXPLORATION = 2
-	MOVING_TO_GREEN = 3
-	CAMERA_SETUP_FOR_PARKING = 4
-	PARKING = 5
-	DONE = 6
+	Ko vidis ring z dovolj veliko kvaliteto, ki ga se nisi videl (grouping bz position) reces njegovo barvo
+	Ko vidis vsaj tri obroce in si ze videl zelenega gres do njega da se parkiras, ce zeleniega se nisi videl se voziz okoli in ga isces
+	Potem gres do polozaja kjer je zelen in prizges parking node.	
+
+	Za vsako ko dobis ring msg, pogledas najblizje kateremu ze znanemu si, slabsa kot je kvaliteta, daljso razdaljo dovolis.
+	Ce je kvaliteta slaba: 
+		* Ce ni nobenega blizu, ga dodas v seznam potencialnih obrocov.
+		* Ce je kateri blizu, ga dodas pod njega
+	Ce je kvaliteta dobra:
+		* Ce je kateri ze zelo blizu, ga dodas pod njega
+		* Ce je kateri srednje dalec, ustvaris not najden obroc
+		* V vsakem primeru, odstranis potencialne obroce v blizini.
+
+	Torej za vsak detected in potencialen ring hranis:
+		best_quality_msg, last_received_msg
+		best_quality se uporablja za poslijanje pozicije v rviz2, 
+		last_received_msg se uporablja, za clustering, ker medtem ko se rebot premika, je lahko njegova pozicija nestabilna,
+		zato rajsi uporabljamo clustering relativno na zadnji dober msg in na best_quality msg.
+
+	Torej ko dobis msg, poisces najblizjo razdaljo med vse best_msgi in med vsemi last_msgi za vse najdene obroce in za vse potencialne obroce.
+
+"""
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker = Marker()
@@ -69,28 +82,20 @@ def argmin(arr, normal_fcn, params):
 def ring_dist_normal_fcn(ring_elt, new_ring):
 	return np.linalg.norm(np.array(ring_elt[0].position) - np.array(new_ring.position))
 
-def millis():
-    return round(time.time() * 1000)	
-
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
 
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
-		self.time = rclpy.time.Time() #T0
+		self.time = rclpy.time.Time()
 		
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.green_ring_found = False
-		self.ring_count = 0	
 		self.rings = []
-		self.timer = self.create_timer(0.1, self.update)
-		self.ring_quality_threshold = 0.3
-		self.state = MasterState.INIT
-		self.start_millis = millis()
+		self.timer = self.create_timer(0.1, self.send_ring_markers)
 
 		print("OK")
 		return
@@ -98,57 +103,13 @@ class MasterNode(Node):
 	def clock_callback(self, msg):
 		self.time = msg.clock
 
-	def update(self):
-		self.send_ring_markers()
-		
-		m_time = millis()
-		if(self.state == MasterState.INIT):
-			if((m_time - self.start_time) > 5000): #Wait for 5s na zacetku,da se zadeve inicializirajo...
-				self.setup_camera_for_ring_detection()
-				self.state = MasterState.CAMERA_SETUP_FOR_EXPLORATION
-				return
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
-			#cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			pass
-		elif(self.state == MasterState.EXPLORATION):
-			#Naceloma tu ustvljas in startas autonomous explorerja vmes se pa premikas do potencialnih obrocev.
-			#In potem razisces potencialne obroce, dokler ne najdes kaj pravega
-			#Ce najdes vse tri obroce in je obvezno eden izmed njih zelen gres v naslednji state, tj. premik do zelenega obroca
-			pass
-		elif(self.state == MasterState.MOVING_TO_GREEN):
-			#Cakas dokler ne prides do tja.
-			#potem premaknes poslejs req, za premik kamere v polozaj za parking...
-			pass
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
-			#cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			#potem posljes req v node za parking...
-			pass
-		elif(self.state == MasterState.PARKING):
-			#cakas, dokler ni potrjeno, da je robot parkiran
-			#ko robot enkrat je parkiran, potem ustavis in koncas. TO je to...			
-		return
-
-				
-	def found_new_ring(self, ring_info):
-		self.ring_count += 1
-		#Tu lahko nacelom izrecemo barvo,...
-
-		color_names = ["red", "green", "blue", "black"]
-		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
-
-		if(ring_info.color_index == 1): #nasli smo zelen ring
-			#spremenis objective v get_to_green_ring
-			#ko prides do tja premaknes kamero, da gleda na parkplac
-			#potem se parkiras.
-		return
-
 	def send_ring_markers(self):
 		ma = MarkerArray()
 
 		for i, r in enumerate(self.rings):
 			marker = None
 			
-			if(r[0].q > self.ring_quality_threshold):
+			if(r[0].q > 0.3):
 				marker = create_marker_point(r[0].position, r[0].color)
 				marker.id = i
 			else:
@@ -162,20 +123,13 @@ class MasterNode(Node):
 		self.ring_markers_pub.publish(ma)	
 		self.cleanup_potential_rings()
 
-	def setup_camera_for_ring_detection(self):
-		return
-	def setup_camera_for_parking(self):
-		return
-
-	#TODO: to se da implementirat dosti lepse in hitrejse, ...
-	#TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
-	def cleanup_potential_rings(self): 
+	def cleanup_potential_rings(self): #TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
 		for j, fi in enumerate(self.rings):
-			if(fi[0].q < self.ring_quality_threshold):
+			if(fi[0].q < 0.3):
 				continue
 
 			for i,ri in enumerate(self.rings):
-				if(ri[0].q >= self.ring_quality_threshold):
+				if(ri[0].q >= 0.3):
 					continue
 				
 				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
@@ -186,20 +140,18 @@ class MasterNode(Node):
 	def add_new_ring(self, ring_info):
 		self.rings.append([ring_info, ring_info])
 		self.cleanup_potential_rings()
-		if(ring_info.q > self.ring_quality_threshold):
-			self.found_new_ring(ring_info)
 		return
 
 	def merge_ring_with_target(self, target_index, ring):
 		result = [self.rings[target_index][0], ring]
-		if(ring.q > self.ring_quality_threshold and result[0].q <= self.ring_quality_threshold):
-			self.found_new_ring(ring)
 		if(ring.q > result[0].q):
 			result = [ring, ring]
 		self.rings[target_index] = result
 		return
 		
 	def ring_callback(self, ring_info):
+		#okej, najprej najdeno najmanjso razdaljo do kaksnega obroca.	
+
 		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
 		if(min_dist > 0.5): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
@@ -207,12 +159,14 @@ class MasterNode(Node):
 			self.merge_ring_with_target(min_index, ring_info)
 		return
 
+
 def main():
 	rclpy.init(args=None)
 	rd_node = MasterNode()
 	rclpy.spin(rd_node)
 	cv2.destroyAllWindows()
 	return
+
 
 if __name__ == '__main__':
 	main()
