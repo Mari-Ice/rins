@@ -265,6 +265,7 @@ class RingDetection(Node):
 				msg = RingInfo()
 				msg.q = q
 				msg.color = [color[2], color[1], color[0]]
+				msg.color_index = color_index
 		
 				#Zadevo je treba prej transformirat v globalne koordiante.
 				time_now = rclpy.time.Time()
