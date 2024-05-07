@@ -26,6 +26,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
 from task2.msg import RingInfo
+from std_srvs.srv import Trigger
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -92,8 +93,12 @@ class MasterNode(Node):
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
-		self.park_pub = self.create_publisher(String, "/park_cmd", QoSReliabilityPolicy.BEST_EFFORT)
+		self.park_srv = self.create_client(Trigger, '/park_cmd')
+		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
+		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
 
+		self.exploration_active = False
+		self.green_ring_position = [0,0]
 		self.green_ring_found = False
 		self.ring_count = 0	
 		self.rings = []
@@ -160,6 +165,8 @@ class MasterNode(Node):
 			self.t1 = m_time
 		if(new_state == MasterState.PARKING):
 			self.start_parking()
+		if(new_state == MasterState.EXPLORATION):
+			self.enable_exploration()
 
 	def on_update(self):
 		self.send_ring_markers()
@@ -176,6 +183,17 @@ class MasterNode(Node):
 			if((m_time - self.t1) > 3000):
 				self.change_state(MasterState.EXPLORATION)
 				self.t1 = m_time
+		elif(self.state == MasterState.EXPLORATION):
+			if(self.green_ring_found):
+				if((m_time - self.t1) > 2000):
+					self.go_to_pose(self.green_ring_position[0], self.green_ring_position[1]) 
+					self.change_state(MasterState.MOVING_TO_GREEN)
+				else:
+					self.disable_exploration()
+			else:
+				self.t1 = m_time
+
+
 		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo 3s
@@ -192,13 +210,8 @@ class MasterNode(Node):
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
 
 		if(ring_info.color_index == 1): #nasli smo zelen ring
-			#spremenis objective v get_to_green_ring
-			#ko prides do tja premaknes kamero, da gleda na parkplac
-			#potem se parkiras.
-			
-			self.go_to_pose(ring_info.position[0], ring_info.position[1]) #TODO: ko prides blizje, se bo polozaj izboljsal. sproti bi mogo torej updata tudi nav2 goal.
-			self.change_state(MasterState.MOVING_TO_GREEN)
-			pass
+			self.green_ring_found = True
+			self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
 		return
 
 	def send_ring_markers(self):
@@ -233,11 +246,20 @@ class MasterNode(Node):
 		return
 
 	def start_parking(self):
-		msg = String()
-		msg.data = "start_park"
-		self.park_pub.publish(msg)
+		req = Trigger.Request()
+		self.park_srv.call_async(req)
 		return
 
+	def enable_exploration(self):
+		if(not self.exploration_active):
+			req = Trigger.Request()
+			self.enable_exploration_srv.call_async(req)
+			self.exploration_active = True
+	def disable_exploration(self):
+		if(self.exploration_active):
+			req = Trigger.Request()
+			self.disable_exploration_srv.call_async(req)
+			self.exploration_active = False
 
 	#TODO: to se da implementirat dosti lepse in hitrejse, ...
 	#TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
@@ -268,6 +290,9 @@ class MasterNode(Node):
 			self.found_new_ring(ring)
 		if(ring.q > result[0].q):
 			result = [ring, ring]
+			if(ring.color_index == 1): #Zelen, izboljsas... TODO
+				self.green_ring_position = ring.position
+				
 		self.rings[target_index] = result
 		return
 		

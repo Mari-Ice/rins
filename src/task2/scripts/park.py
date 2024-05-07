@@ -27,6 +27,7 @@ from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 ##Note: Roka more bit v parked2 poziciji, da kaj od tega dela.
 
@@ -85,7 +86,7 @@ class park(Node):
 		self.ts.registerCallback(self.rgb_pc_callback)
 
 		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 10)
-		self.cmd_sub = self.create_subscription(String, "/park_cmd", self.park_cmd_callback, qos_profile_sensor_data)
+		self.cmd_srv = self.create_service(Trigger, '/park_cmd', self.park_cmd_callback)
 
 		self.pixel_locations = None
 		self.pixel_locations_set = False
@@ -101,10 +102,12 @@ class park(Node):
 		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
 		# cv2.setTrackbarPos("A", "Image", 133)
 
-	def park_cmd_callback(self, data):
-		print(f"park_cmd_callback: {data}")
+	def park_cmd_callback(self, req, resp):
 		self.park_state = ParkState.IDLE
-		return
+		
+		resp.success = True
+		resp.message = "Navigation disabled."
+		return resp
 
 	def waitUntilNav2Active(self, navigator='bt_navigator', localizer='amcl'):
 		"""Block until the full navigation system is up and running."""
@@ -222,7 +225,7 @@ class park(Node):
 			circle_quality = circle_quality = math.pow(math.e, -0.1*(abs(78.59 - circle[2])))
 
 			if(circle_quality > 0.2):
-				img = cv2.arrowedLine(img, (160,180), (int(circle[0]), int(circle[1])), (0,0,255), 5)  
+				mask = cv2.arrowedLine(mask, (160,180), (int(circle[0]), int(circle[1])), 127, 3)  
 
 				if(self.park_state != ParkState.PARKED and (self.park_state == ParkState.IDLE or circle_quality > self.circle_quality)):
 					print("Rotating")
