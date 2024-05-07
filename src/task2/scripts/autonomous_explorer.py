@@ -102,12 +102,12 @@ class MapGoals(Node):
     def priority_waypoint_callback(self, waypoint : Waypoint):
         self.get_logger().info(f"Received priority waypoint: {waypoint}")
         # goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
-        self.face_keypoints.append([waypoint.x, waypoint.y, 0])
+        self.priority_keypoints.append([waypoint.x, waypoint.y, 0])
 
     def final_waypoint_callback(self, waypoint : Waypoint):
         self.get_logger().info(f"Received final waypoint: {waypoint}")
         # goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
-        self.face_keypoints.append([waypoint.x, waypoint.y, 0])
+        self.priority_keypoints.append([waypoint.x, waypoint.y, 0])
 
     def enable_navigation_callback(self, request, response):
         self.enable_navigation = True
@@ -192,35 +192,6 @@ class MapGoals(Node):
         
         self.last_keypoint = new_kp
         return new_kp
-    
-    def final_waypoint_callback(self, waypoint: Waypoint):
-        # stop following the waypoints, move to the final waypoint and exit
-        self.stop_following_waypoints()
-
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.x = waypoint.x
-        goal_pose.pose.y = waypoint.y
-
-        # TODO: orientation
-
-        self.go_to_pose(goal_pose)
-
-        rclpy.shutdown()
-        exit(0)
-
-    def priority_waypoint_callback(self, waypoint: Waypoint):
-        # stop following the waypoints, move to the priority waypoint
-
-        self.currently_navigating = True
-
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose = marker.pose
-
-        self.go_to_pose(goal_pose)
 
     def timer_callback(self): 
         if STOP_AFTER_THREE and self.face_count >= 3:
@@ -242,7 +213,7 @@ class MapGoals(Node):
             self.ring_count[result.color] = self.ring_count[result.color] + 1
         
         # If the robot is not currently navigating to a goal, and there is a goal pending
-        if self.enable_navigation and not self.currently_navigating and self.pending_goal and not self.currently_greeting:
+        if self.enable_navigation and not self.currently_navigating and not self.currently_navigating_priority:
             keypoint = self.get_next_keypoint()
 
             if keypoint is not None:
@@ -326,9 +297,9 @@ class MapGoals(Node):
         self.result_future.add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
-        if(self.currently_greeting):
+        if(self.currently_navigating_priority):
             # self.greet()
-            self.currently_greeting = False
+            self.currently_navigating_priority = False
 
         self.currently_navigating = False
         status = future.result().status
@@ -371,7 +342,7 @@ class MapGoals(Node):
 
     def calculate_keypoints(self):
         # image = self.map_np
-        image = cv2.imread(os.path.expanduser('~/colcon_ws/rins/rins/src/dis_tutorial3/maps/map.pgm'))
+        image = cv2.imread(os.path.expanduser('~/colcon_ws/rins/src/dis_tutorial3/maps/map.pgm'))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         original_image = image.copy()
 
