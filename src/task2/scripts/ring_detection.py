@@ -113,6 +113,7 @@ class RingDetection(Node):
 		self.ring_info_pub = self.create_publisher(RingInfo, "/ring_info", QoSReliabilityPolicy.BEST_EFFORT)
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+
 		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
 		# cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
 
