@@ -43,6 +43,7 @@ install(PROGRAMS
   scripts/autonomous_explorer.py
   scripts/color_talker.py
   scripts/ring_detection.py
+  scripts/master.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

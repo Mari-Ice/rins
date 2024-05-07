@@ -29,7 +29,6 @@ from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
 from task2.msg import RingInfo
 
-
 amcl_pose_qos = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 		  reliability=QoSReliabilityPolicy.RELIABLE,
@@ -97,7 +96,6 @@ class RingDetection(Node):
 		])
 
 		self.bridge = CvBridge()
-		self.scan = None
 
 		# For listening and loading the TF
 		self.tf_buffer = Buffer()
@@ -110,8 +108,8 @@ class RingDetection(Node):
 		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 10, 0.3, allow_headerless=False) 
 		self.ts.registerCallback(self.rgb_pc_callback)
 
-		#TODO to spremeni v msg tip, marker je samo zacasno
-		self.marker_pub = self.create_publisher(Marker, "/rings", QoSReliabilityPolicy.BEST_EFFORT)
+		#msg publisher
+		self.rings_info_pub = self.create_publisher(RingInfo, "/rings_info", QoSReliabilityPolicy.BEST_EFFORT)
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
@@ -262,35 +260,11 @@ class RingDetection(Node):
 				
 				msg = RingInfo()
 				msg.q = q
-				msg.color = color_uint
-				msg.position = [float(ring_position[0]), float(ring_position[1]), float(ring_position[2]) ]
-				##TODO pusblish msg
+				msg.color = [color[2], color[1], color[0]]
+				msg.position = [float(ring_position[2]), float(ring_position[0]), float(ring_position[1]) ]
+				self.rings_info_pub.publish(msg)
 
-				marker = Marker()
-				marker.header.frame_id = "/top_camera_link"
-				marker.header.stamp = rgb.header.stamp
-				marker.id = int(10000*random.random())
-				marker.type = 2
-				marker.scale.x = 0.1
-				marker.scale.y = 0.1
-				marker.scale.z = 0.1
-
-				marker.color.r = color[2]
-				marker.color.g = color[1]
-				marker.color.b = color[0]
-				marker.color.a = 1.0
-
-				marker.pose.position.x = float(ring_position[2])
-				marker.pose.position.y = float(ring_position[0])
-				marker.pose.position.z = float(ring_position[1])
-				self.marker_pub.publish(marker)
-			
 		cv2.imshow("Image", img_display)
-		# cv2.imshow("Mask", mask)
-		# depth_img = depth_raw.copy()
-		# depth_img = (depth_img / np.max(depth_img)) * 255
-		# depth_img = np.array(depth_img, dtype=np.uint8)
-		# cv2.imshow("Depth", depth_img)
 
 def main():
 	print("OK")
