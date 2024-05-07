@@ -92,7 +92,7 @@ class park(Node):
 		self.park_state = ParkState.PARKED
 		self.circle_quality = 0
 
-		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+		#cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
 		cv2.waitKey(1)
 		cv2.moveWindow('Image',  1   ,1)
@@ -271,7 +271,7 @@ class park(Node):
 					self.teleop_pub.publish(cmd_msg)
 			
 		cv2.imshow("Mask", mask)
-		cv2.imshow("Image", img)
+		#cv2.imshow("Image", img)
 
 def main():
 	print("OK")

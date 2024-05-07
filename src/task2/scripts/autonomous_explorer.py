@@ -57,15 +57,16 @@ class MapGoals(Node):
 			3: 0,
 		}
 		
-		self.enable_navigation = False
-
 		# Basic ROS stuff
 		timer_frequency = 10
 		map_topic = "/map"
 		timer_period = 1/timer_frequency
 
+		self.goal_handle_inited = False
+		self.goal_handle = None
+
 		# Functional variables
-		self.enable_navigation = True
+		self.enable_navigation = False
 		self.result_future = None
 		self.currently_navigating = False
 		self.currently_navigating_priority = False
@@ -119,6 +120,7 @@ class MapGoals(Node):
 		self.enable_navigation = False
 		response.success = True
 		response.message = "Navigation disabled."
+		self.stop_following_waypoints()
 		return response
 
 	def map_callback(self, msg):
@@ -266,7 +268,8 @@ class MapGoals(Node):
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
 
-		self.nav_to_pose_client._cancel_goal_async()
+		if(self.goal_handle_inited):
+			self.nav_to_pose_client._cancel_goal_async(self.goal_handle)
 
 	def go_to_pose(self, pose):
 		"""Send a `NavToPose` action request."""
@@ -286,14 +289,15 @@ class MapGoals(Node):
 		self.send_goal_future.add_done_callback(self.goal_accepted_callback)
 
 	def goal_accepted_callback(self, future):
-		goal_handle = future.result()
+		self.goal_handle = future.result()
+		self.goal_handle_inited = True
 
-		if not goal_handle.accepted:
+		if not self.goal_handle.accepted:
 			self.get_logger().error('Goal was rejected!')
 			self.currently_navigating = False
 			return	
 
-		self.result_future = goal_handle.get_result_async()
+		self.result_future = self.goal_handle.get_result_async()
 		self.result_future.add_done_callback(self.get_result_callback)
 
 	def get_result_callback(self, future):
@@ -304,10 +308,13 @@ class MapGoals(Node):
 		self.currently_navigating = False
 		status = future.result().status
 
+		if(status == GoalStatus.STATUS_CANCELED):
+			return
+
 		if status != GoalStatus.STATUS_SUCCEEDED:
 			self.get_logger().info(f'Goal failed with status code: {status}')
 			#V tem primeru vzamemo prejsni goal in poskusimo do tja...
-			
+		
 			world_x, world_y, orientation = self.get_prev_keypoint()
 			goal_pose = self.generate_goal_message(world_x, world_y, orientation)
 			self.go_to_pose(goal_pose)
