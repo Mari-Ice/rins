@@ -7,6 +7,7 @@ from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
+from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, PoseStamped
 
 from visualization_msgs.msg import Marker, MarkerArray
@@ -27,6 +28,8 @@ from rclpy.qos import qos_profile_sensor_data
 import math
 import numpy as np
 
+from nav2_simple_commander.robot_navigator import BasicNavigator
+
 STOP_AFTER_THREE = True
 
 qos_profile = QoSProfile(
@@ -39,11 +42,11 @@ class MapGoals(Node):
     def __init__(self):
         super().__init__('map_goals')
 
-        self.keypoints = []
-        self.keypoint_markers = MarkerArray()
-        self.last_keypoint = [0,0,0]
-        self.priority_keypoints = []
-        self.keypoint_index = 0
+        self.waypoints = []
+        self.waypoint_markers = MarkerArray()
+        self.last_waypoint = [0,0,0]
+        self.priority_waypoints = []
+        self.waypoint_index = 0
         self.forward = True
         self.future = None
         self.future_color = None
@@ -54,6 +57,8 @@ class MapGoals(Node):
             2: 0,
             3: 0,
         }
+
+        self.navigator_ready = False
 
         # Basic ROS stuff
         timer_frequency = 10
@@ -77,30 +82,64 @@ class MapGoals(Node):
         
         # Subscribe to map, and create an action client for sending goals
         self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, map_topic, self.map_callback, qos_profile)
-        self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
-        self.rings = self.create_subscription(MarkerArray, '/ring', self.add_ring_callback, 10)
-        self.final_keypoint_sub = self.create_subscription(Waypoint, '/final_keypoint', self.final_waypoint_callback, 10)
-        self.priority_keypoint_sub = self.create_subscription(Waypoint, '/priority_keypoint', self.priority_waypoint_callback, 10)
+        # self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+        self.navigator = BasicNavigator()
+        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odometry_callback, 10)
+
+        self.final_waypoint_sub = self.create_subscription(Waypoint, '/final_waypoint', self.final_waypoint_callback, 10)
+        self.priority_waypoint_sub = self.create_subscription(Waypoint, '/priority_waypoint', self.priority_waypoint_callback, 10)
         # Create a timer, to do the main work.
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
-        self.say_color = self.create_client(Color, '/say_color')
-        self.say_hello = self.create_client(Trigger, '/say_hello')
-        self.keypoint_publisher = self.create_publisher(MarkerArray, '/keypoints', QoSReliabilityPolicy.BEST_EFFORT)
+        self.waypoint_publisher = self.create_publisher(MarkerArray, '/waypoints', QoSReliabilityPolicy.BEST_EFFORT)
         
         # Enable and disable navigation
         self.enable_navigation_sub = self.create_service(Trigger, '/enable_navigation', self.enable_navigation_callback)
         self.disable_navigation_sub = self.create_service(Trigger, '/disable_navigation', self.disable_navigation_callback)
 
-    def enable_navigation_callback(self, request, response):
-        self.enable_navigation = True
+    def odometry_callback(self, msg : Odometry):
+        if self.navigator_ready:
+            return
+        
+        pose = PoseStamped()
+        pose.header.frame_id = "/map"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = msg.pose.pose.position.x
+        pose.pose.position.y = msg.pose.pose.position.y
+        pose.pose.position.z = 0.0
+        pose.pose.orientation = msg.pose.pose.orientation
+
+        self.navigator.setInitialPose(pose)
+        self.navigator.waitUntilNav2Active()
+        self.navigator_ready = True
+
+    def enable_navigation_callback(self, _, response):
+        if not self.navigator_ready:
+            response.success = False
+            response.message = "Navigator not ready."
+            return response
+
+        if(self.waypoints == []):
+            response.success = False
+            response.message = "No waypoints found."
+            return response
+
+        self.navigator.followWaypoints(self.waypoints)
         response.success = True
         response.message = "Navigation enabled."
         return response
     
-    def disable_navigation_callback(self, request, response):
-        self.enable_navigation = False
+    def disable_navigation_callback(self, _, response):
+        # TODO: don't stop if the robot is currently navigating to a priority waypoint
+        # TODO: only return success if the robot actually stops
+
+        if not self.navigator_ready:
+            response.success = False
+            response.message = "Navigator not ready."
+            return response
+
+        self.navigator.cancelTask()
         response.success = True
         response.message = "Navigation disabled."
         return response
@@ -128,83 +167,38 @@ class MapGoals(Node):
                                  euler_from_quaternion(quat_list)[-1]]
         #self.get_logger().info(f"Read a new Map (Occupancy grid) from the topic.")
   
-        self.calculate_keypoints()
-
-    def get_prev_keypoint(self):
-        new_index = self.keypoint_index-1
-        if(not self.forward):
-            new_index = len(self.keypoints)-1-self.keypoint_index-1
-        while(new_index < 0):
-            new_index += len(self.keypoints)
+        self.calculate_waypoints()
     
-        self.keypoint_index -= 1
-        if self.keypoint_index < 0:
-            self.keypoint_index = len(self.keypoints)-1
+    def final_waypoint_callback(self, waypoint: PoseStamped):
+        # # in case we change this into a service uncomment this
+        # if not self.navigator_ready:
+        #     response.success = False
+        #     response.message = "Navigator not ready."
+        #     return response
 
-        new_kp = self.keypoints[new_index]	
-        direction = [ new_kp[0]-self.last_keypoint[0], new_kp[1]-self.last_keypoint[1] ] 
-        q = math.atan2(direction[1], direction[0])
-        new_kp[2] = q
-        print(f"YAW: {q}, direction: {direction}")
-        
-        self.last_keypoint = new_kp
-        return new_kp
+        self.navigator.cancelTask()
 
-    def get_next_keypoint(self):
-        if(len(self.priority_keypoints) > 0):
-            self.currently_navigating_priority = True
-            return self.priority_keypoints.pop(0)
-        
-        if(len(self.keypoints) == 0):
-            print("waiting for keypoints")
-            return
-     
-        new_index = self.keypoint_index
-        if(not self.forward):
-            new_index = len(self.keypoints)-1-self.keypoint_index
-        
-        self.keypoint_index += 1
-        if self.keypoint_index >= len(self.keypoints):
-            self.keypoint_index = 0
-            self.forward = not self.forward
+        self.navigator.goToPose(waypoint)
 
-        new_kp = self.keypoints[new_index]	
-        direction = [ new_kp[0]-self.last_keypoint[0], new_kp[1]-self.last_keypoint[1] ] 
-        q = math.atan2(direction[1], direction[0])
-        new_kp[2] = q
-        print(f"YAW: {q}, direction: {direction}")
-        
-        self.last_keypoint = new_kp
-        return new_kp
-    
-    def final_waypoint_callback(self, waypoint: Waypoint):
-        # stop following the waypoints, move to the final waypoint and exit
-        self.stop_following_waypoints()
-
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.x = waypoint.x
-        goal_pose.pose.y = waypoint.y
-
-        # TODO: orientation
-
-        self.go_to_pose(goal_pose)
+        while not self.navigator.isTaskComplete():
+            pass
 
         rclpy.shutdown()
         exit(0)
 
-    def priority_waypoint_callback(self, waypoint: Waypoint):
+    def priority_waypoint_callback(self, waypoint: PoseStamped):
+        # # in case we change this into a service uncomment this
+        # if not self.navigator_ready:
+        #     response.success = False
+        #     response.message = "Navigator not ready."
+        #     return response
+
         # stop following the waypoints, move to the priority waypoint
 
-        self.currently_navigating = True
+        self.navigator.cancelTask()
+        self.navigator.goToPose(waypoint)
 
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose = marker.pose
-
-        self.go_to_pose(goal_pose)
+        # TODO: return to following waypoints after reaching the priority waypoint
 
     def timer_callback(self): 
         if STOP_AFTER_THREE and self.face_count >= 3:
@@ -212,28 +206,12 @@ class MapGoals(Node):
             rclpy.shutdown()
             exit(0)
 
-        if self.future and self.future.done():
-            result = self.future.result()
-            self.get_logger().info(f"greeting result: {result}")
-            self.currently_navigating_priority = False
-            self.future = None
-            self.face_count += 1
+        if not self.navigator_ready:
+            return
 
-        if self.future_color and self.future_color.done():
-            result = self.future_color.result()
-            self.get_logger().info(f"color talker result: {result.message}")
-            self.future_color = None
-            self.ring_count[result.color] = self.ring_count[result.color] + 1
-        
-        # If the robot is not currently navigating to a goal, and there is a goal pending
-        if self.enable_navigation and not self.currently_navigating:
-            keypoint = self.get_next_keypoint()
-
-            if keypoint is not None:
-                world_x, world_y, orientation = keypoint
-
-                goal_pose = self.generate_goal_message(world_x, world_y, orientation)
-                self.go_to_pose(goal_pose)
+        if self.navigator.isTaskComplete():
+            self.get_logger().info(f"I visited all waypoints.\n\n")
+            self.navigator.followWaypoints(self.waypoints)
 
     def generate_goal_message(self, x, y, theta=0.2):
         goal_pose = PoseStamped()
@@ -272,65 +250,6 @@ class MapGoals(Node):
         
         # Apply rotation
         return x, y
-    
-    def stop_following_waypoints(self):
-        self.currently_navigating = False
-
-        while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().info("'NavigateToPose' action server not available, waiting...")
-
-        self.nav_to_pose_client._cancel_goal_async()
-
-    def go_to_pose(self, pose):
-        """Send a `NavToPose` action request."""
-        self.currently_navigating = True
-
-        while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().info("'NavigateToPose' action server not available, waiting...")
-
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = pose
-        goal_msg.behavior_tree = ""
-
-        self.get_logger().info('Attempting to navigate to goal: ' + str(pose.pose.position.x) + ' ' + str(pose.pose.position.y) + '...')
-        self.send_goal_future = self.nav_to_pose_client.send_goal_async(goal_msg)
-        
-        # Call this function when the Action Server accepts or rejects a goal
-        self.send_goal_future.add_done_callback(self.goal_accepted_callback)
-
-    def goal_accepted_callback(self, future):
-        goal_handle = future.result()
-
-        if not goal_handle.accepted:
-            self.get_logger().error('Goal was rejected!')
-            self.currently_navigating = False
-            return	
-
-        self.result_future = goal_handle.get_result_async()
-        self.result_future.add_done_callback(self.get_result_callback)
-
-    def get_result_callback(self, future):
-        if(self.currently_navigating_priority):
-            self.greet()
-
-        self.currently_navigating = False
-        status = future.result().status
-
-        if status != GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info(f'Goal failed with status code: {status}')
-            #V tem primeru vzamemo prejsni goal in poskusimo do tja...
-            
-            world_x, world_y, orientation = self.get_prev_keypoint()
-            goal_pose = self.generate_goal_message(world_x, world_y, orientation)
-            self.go_to_pose(goal_pose)
-
-            return
-         
-        self.get_logger().info(f'Goal reached (according to Nav2).')
-
-    def greet(self):
-        req = Trigger.Request()
-        self.future = self.say_hello.call_async(req)
 
     def yaw_to_quaternion(self, angle_z = 0.):
         quat_tf = quaternion_from_euler(0, 0, angle_z)
@@ -344,15 +263,7 @@ class MapGoals(Node):
                         [s , c]])
         return rot
 
-    def add_face(self, marker):
-        x = marker.pose.orientation.x
-        y = marker.pose.orientation.y
-        z = marker.pose.orientation.z
-        w = marker.pose.orientation.w
-        _, _, theta = euler_from_quaternion((x, y, z, w))
-        self.priority_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
-
-    def calculate_keypoints(self):
+    def calculate_waypoints(self):
         # image = self.map_np
         image = cv2.imread("/home/theta/colcon_ws/rins/src/dis_tutorial3/maps/map.pgm")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -394,8 +305,17 @@ class MapGoals(Node):
             cv2.circle(original_image, (int(centroids[i][0]), int(centroids[i][1])), 4, (0, 0, 255), -1)
 
             # print(f"Centroid {i}: {centroids[i]}")
-            world_keypoint = self.map_pixel_to_world(centroids[i][0], centroids[i][1])
-            self.keypoints.append([world_keypoint[0], world_keypoint[1], 0])
+            world_waypoint = self.map_pixel_to_world(centroids[i][0], centroids[i][1])
+        
+            pose = PoseStamped()
+            pose.header.frame_id = "/map"
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.pose.position.x = world_waypoint[0]
+            pose.pose.position.y = world_waypoint[1]
+            pose.pose.position.z = 0.0
+
+            self.waypoints.append(pose)
+
             
             # add marker
             marker = Marker()
@@ -419,42 +339,15 @@ class MapGoals(Node):
             marker.color.a = 1.0
 
             # Set the pose of the marker
-            marker.pose.position.x = float(world_keypoint[0])
-            marker.pose.position.y = float(world_keypoint[1])
+            marker.pose.position.x = float(world_waypoint[0])
+            marker.pose.position.y = float(world_waypoint[1])
             marker.pose.position.z = float(0)
 
-            self.keypoint_markers.markers.append(marker)
-
-        # define distance matrix between keypoints
-        distances = np.zeros((len(self.keypoints), len(self.keypoints)))
-        for i in range(len(self.keypoints)):
-            for j in range(len(self.keypoints)):
-                distances[i, j] = np.linalg.norm(np.array(self.keypoints[i]) - np.array(self.keypoints[j]))
-
-        n = distances.shape[0]
-        route = [0] # Start at A
-        visited = set([0])
-        while len(visited) < n:
-            current = route[-1]
-            nearest = min([(i, distances[current][i]) for i in range(n) if i not in visited], key=lambda x: x[1])[0]
-            route.append(nearest)
-            visited.add(nearest)
-        route.append(0) # Return to A
+            self.waypoint_markers.markers.append(marker)
         
-        # reorder keypoints
-        self.keypoints = [self.keypoints[i] for i in route]
-
-        self.keypoint_publisher.publish(self.keypoint_markers)
+        self.waypoint_publisher.publish(self.waypoint_markers)
         # cv2.imshow("waypoints", original_image)
         #vcv2.waitKey(0)
-
-    def add_ring_callback(self, markers : MarkerArray):
-        
-        for marker in markers.markers:
-            # TODO: color
-            req = Color.Request()
-            req.color = 2
-            self.future_color = self.say_color.call_async(req)
 
 def main():
     rclpy.init(args=None)
