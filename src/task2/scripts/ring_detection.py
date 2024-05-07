@@ -147,7 +147,7 @@ class RingDetection(Node):
 
 	def rgb_pc_callback(self, rgb, pc, depth_raw):
 
-		if((time.time() - self.start_time) < 15):
+		if((time.time() - self.start_time) < 5):
 			return
 
 		cv2.waitKey(1)
@@ -233,22 +233,21 @@ class RingDetection(Node):
 				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
 				color_uint = (color*255)
 				color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
-				
 				color_index = int(((hue + 60)%360) / 120)
-				color_names = ["red", "green", "blue"]
-				color_name = color_names[color_index]
-				# print(f"color: {color_name}")
 
-				cv2.rectangle(img_display, (x1, y1), (x2, y2), color_uint, 1)
-				#cv2.putText(img_display, color_name, (cx ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-				
-				#Tu dobis krog torej velikost kroga / luknje
 				ring_points = circle_xyz[circle_mask != 0]
 				colors_set = circle_img[circle_mask != 0]
-				ring_position = np.sum(ring_points, axis=0) / len(ring_points) #TODO: transform ring point to base_link tf
+				ring_position = np.sum(ring_points, axis=0) / len(ring_points)
 
 				avg_color = np.sum(colors_set, axis=0) / len(colors_set)
+				if(avg_color[0] < 40 and avg_color[1] < 40 and avg_color[2] < 40):
+					color_index = 3 #black
+					color = (0.,0.,0.)
+					color_uint = (0,0,0)
+
+				color_names = ["red", "green", "blue", "black"]
+				color_name = color_names[color_index]
+
 				color_dist_sq = (colors_set - avg_color)**2
 				avg_color_dist = np.mean(color_dist_sq)
 
@@ -257,15 +256,11 @@ class RingDetection(Node):
 				q_okroglost = math.exp(-3.27*(1-min(w,h)/max(w,h))**2)
 				q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(ring_position))**2)
 
-				q_geom = (q_size + q_okroglost + q_distance)/3
-				q = min(q_geom, q_colors)
+				q = q_colors * q_size * q_okroglost * q_distance
 
-				# #TO posljemo
-				# cv2.putText(img_display, f"{q1:.3f}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				# cv2.putText(img_display, f"{q2:.3f}", (x2 ,cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				# cv2.putText(img_display, f"{q3:.3f}", (x2 ,cy+40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				# cv2.putText(img_display, f"{q4:.3f}", (x2 ,cy+60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2) #Preveri ali je to sploh smiselno
-				cv2.putText(img_display, f"{q:.2f}", (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_uint, 2) #Preveri ali je to sploh smiselno
+				cv2.rectangle(img_display, (x1, y1), (x2, y2), color_uint, 1)
+				cv2.putText(img_display, color_name, (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color_uint, 2)
+				cv2.putText(img_display, f"{q:.2f}", (x2 ,cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_uint, 2)
 				
 				msg = RingInfo()
 				msg.q = q

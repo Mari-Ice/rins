@@ -124,16 +124,16 @@ class MasterNode(Node):
 		self.ring_markers_pub.publish(ma)	
 		#print(f"published., num  of potenital: {len(self.potential_rings)}")
 
-	def cleanup_potential_rings(self):
+	def cleanup_potential_rings(self): #TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
 		for j, fi in enumerate(self.found_rings):
 			for i,ri in enumerate(self.potential_rings):
 				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
-				if(dist < 2.):
+				if(dist < 2.5):
 					self.potential_rings.remove(ri)	
 		
 
 	def add_new_ring(self, ring_info):
-		if(ring_info.q > 0.5):
+		if(ring_info.q > 0.3):
 			self.found_rings.append([ring_info, ring_info])
 			self.cleanup_potential_rings()
 		else:
@@ -152,7 +152,7 @@ class MasterNode(Node):
 		min_dist_to_potential, min_potential_index = argmin(self.found_rings, ring_dist_normal_fcn, ring_info)
 
 		min_dist = min(min_dist_to_potential, min_dist_to_found)	
-		if(min_dist > 0.4): #TODO, threshold, glede na kvaliteto
+		if(min_dist > 0.5): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
 		else:
 			if(min_dist_to_potential < min_dist_to_found):
