@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import tf2_ros
 
+from enum import Enum
 from cv_bridge import CvBridge, CvBridgeError
 
 from std_msgs.msg import ColorRGBA
@@ -16,10 +17,13 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.duration import Duration
+from rclpy.action import ActionClient
+from action_msgs.msg import GoalStatus
+from nav2_msgs.action import NavigateToPose
 
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import PointStamped, Vector3, Pose
+from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
 from task2.msg import RingInfo
 
@@ -57,6 +61,8 @@ def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker.pose.position.z = float(position[2])
 	return marker
 
+	
+
 def argmin(arr, normal_fcn, params):
 	c_min = 100001
 	c_min_index = -1
@@ -84,14 +90,16 @@ class MasterNode(Node):
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
+		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
 		self.green_ring_found = False
 		self.ring_count = 0	
 		self.rings = []
-		self.timer = self.create_timer(0.1, self.update)
+		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
+		self.t1 = millis()
 		self.state = MasterState.INIT
-		self.start_millis = millis()
+		self.change_state(MasterState.INIT)
 
 		print("OK")
 		return
@@ -99,37 +107,80 @@ class MasterNode(Node):
 	def clock_callback(self, msg):
 		self.time = msg.clock
 
-	def update(self):
+	def create_nav2_goal_msg(self, x,y):
+		goal_pose = PoseStamped()
+		goal_pose.header.frame_id = 'map'
+		goal_pose.header.stamp = self.time
+		goal_pose.pose.position.x = float(x)
+		goal_pose.pose.position.y = float(y)
+		goal_pose.pose.orientation = Quaternion(x=0.,y=0.,z=0.,w=1.)
+		return goal_pose
+	
+	def go_to_pose(self, x,y): #nav2
+		pose = self.create_nav2_goal_msg(x,y)
+
+		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
+
+		goal_msg = NavigateToPose.Goal()
+		goal_msg.pose = pose
+		goal_msg.behavior_tree = ""
+		self.send_goal_future = self.nav_to_pose_client.send_goal_async(goal_msg)
+		self.send_goal_future.add_done_callback(self.goal_accepted_callback)
+	
+	def goal_accepted_callback(self, future):
+		goal_handle = future.result()
+		if not goal_handle.accepted:
+			self.get_logger().error('Goal was rejected!')
+			return	
+		self.result_future = goal_handle.get_result_async()
+		self.result_future.add_done_callback(self.get_result_callback)
+	
+	def get_result_callback(self, future):
+		status = future.result().status
+		if status != GoalStatus.STATUS_SUCCEEDED:
+			print(f'Goal failed with status code: {status}')
+		else:
+			print(f'Goal reached (according to Nav2).')
+		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
+
+	def change_state(self, state):
+		old_state = self.state
+		self.state = state
+		print(f"state -> {MasterState(state).name}")
+
+		self.on_state_change(old_state, state)
+	
+	def on_state_change(self, old_state, new_state):
+		m_time = millis()
+		if(old_state == MasterState.MOVING_TO_GREEN):
+			self.setup_camera_for_parking()
+			self.t1 = m_time
+		
+
+	def on_update(self):
 		self.send_ring_markers()
 		
 		m_time = millis()
 		if(self.state == MasterState.INIT):
-			if((m_time - self.start_time) > 5000): #Wait for 5s na zacetku,da se zadeve inicializirajo...
+			if((m_time - self.t1) > 5000): #Wait for 5s na zacetku,da se zadeve inicializirajo...
 				self.setup_camera_for_ring_detection()
-				self.state = MasterState.CAMERA_SETUP_FOR_EXPLORATION
-				return
+				self.change_state(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
+				self.t1 = m_time
 		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
-			#cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			pass
-		elif(self.state == MasterState.EXPLORATION):
-			#Naceloma tu ustvljas in startas autonomous explorerja vmes se pa premikas do potencialnih obrocev.
-			#In potem razisces potencialne obroce, dokler ne najdes kaj pravega
-			#Ce najdes vse tri obroce in je obvezno eden izmed njih zelen gres v naslednji state, tj. premik do zelenega obroca
-			pass
-		elif(self.state == MasterState.MOVING_TO_GREEN):
-			#Cakas dokler ne prides do tja.
-			#potem premaknes poslejs req, za premik kamere v polozaj za parking...
-			pass
+			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
+			#zaenkrat samo cakamo 3s
+			if((m_time - self.t1) > 3000):
+				self.change_state(MasterState.EXPLORATION)
+				self.t1 = m_time
 		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
-			#cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			#potem posljes req v node za parking...
-			pass
-		elif(self.state == MasterState.PARKING):
-			#cakas, dokler ni potrjeno, da je robot parkiran
-			#ko robot enkrat je parkiran, potem ustavis in koncas. TO je to...			
+			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
+			#zaenkrat samo cakamo 3s
+			if((m_time - self.t1) > 3000):
+				self.change_state(MasterState.PARKING)
+				self.t1 = m_time
 		return
 
-				
 	def found_new_ring(self, ring_info):
 		self.ring_count += 1
 		#Tu lahko nacelom izrecemo barvo,...
@@ -141,6 +192,10 @@ class MasterNode(Node):
 			#spremenis objective v get_to_green_ring
 			#ko prides do tja premaknes kamero, da gleda na parkplac
 			#potem se parkiras.
+			
+			self.go_to_pose(ring_info.position[0], ring_info.position[1]) #TODO: ko prides blizje, se bo polozaj izboljsal. sproti bi mogo torej updata tudi nav2 goal.
+			self.change_state(MasterState.MOVING_TO_GREEN)
+			pass
 		return
 
 	def send_ring_markers(self):
@@ -164,8 +219,14 @@ class MasterNode(Node):
 		self.cleanup_potential_rings()
 
 	def setup_camera_for_ring_detection(self):
+		msg = String()
+		msg.data = "look_for_rings"
+		self.arm_pos_pub.publish(msg)
 		return
 	def setup_camera_for_parking(self):
+		msg = String()
+		msg.data = "look_for_parking2"
+		self.arm_pos_pub.publish(msg)
 		return
 
 	#TODO: to se da implementirat dosti lepse in hitrejse, ...
@@ -201,6 +262,9 @@ class MasterNode(Node):
 		return
 		
 	def ring_callback(self, ring_info):
+		if(self.state != MasterState.EXPLORATION):
+			return
+
 		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
 		if(min_dist > 0.5): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	

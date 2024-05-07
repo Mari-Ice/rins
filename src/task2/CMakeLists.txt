@@ -45,6 +45,7 @@ install(PROGRAMS
   scripts/color_talker.py
   scripts/ring_detection.py
   scripts/master.py
+  scripts/park.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
