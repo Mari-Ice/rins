@@ -94,8 +94,7 @@ class MasterNode(Node):
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.found_rings = []
-		self.potential_rings = []
+		self.rings = []
 		self.timer = self.create_timer(0.1, self.send_ring_markers)
 
 		print("OK")
@@ -107,58 +106,57 @@ class MasterNode(Node):
 	def send_ring_markers(self):
 		ma = MarkerArray()
 
-		for i, r in enumerate(self.found_rings):
-			marker = create_marker_point(r[0].position, r[0].color)
-			marker.id = i
+		for i, r in enumerate(self.rings):
+			marker = None
+			
+			if(r[0].q > 0.3):
+				marker = create_marker_point(r[0].position, r[0].color)
+				marker.id = i
+			else:
+				marker = create_marker_point(r[0].position, [0.8,0.8,0.8])
+				marker.id = 100+i
+			
 			marker.header.frame_id = "/map"
 			marker.lifetime = Duration(seconds=.2).to_msg()
 			ma.markers.append(marker)
-		for i, r in enumerate(self.potential_rings):
-			marker = create_marker_point(r[0].position, [0.3,0.3,0.3])
-			marker.id = 100+i
-			marker.header.frame_id = "/map"
-			marker.lifetime = Duration(seconds=.2).to_msg()
-			marker.header.stamp = self.time
-			ma.markers.append(marker)
-
+		
 		self.ring_markers_pub.publish(ma)	
-		#print(f"published., num  of potenital: {len(self.potential_rings)}")
+		self.cleanup_potential_rings()
 
 	def cleanup_potential_rings(self): #TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
-		for j, fi in enumerate(self.found_rings):
-			for i,ri in enumerate(self.potential_rings):
+		for j, fi in enumerate(self.rings):
+			if(fi[0].q < 0.3):
+				continue
+
+			for i,ri in enumerate(self.rings):
+				if(ri[0].q >= 0.3):
+					continue
+				
 				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
-				if(dist < 2.5):
-					self.potential_rings.remove(ri)	
-		
+				if(dist < 1.0):
+					self.rings.remove(ri)
+		return
 
 	def add_new_ring(self, ring_info):
-		if(ring_info.q > 0.3):
-			self.found_rings.append([ring_info, ring_info])
-			self.cleanup_potential_rings()
-		else:
-			self.potential_rings.append([ring_info, ring_info])
-	def merge_ring_with_target(self, target, ring):
-		result = [target[0], ring]
-		if(ring.q > target[0].q):
+		self.rings.append([ring_info, ring_info])
+		self.cleanup_potential_rings()
+		return
+
+	def merge_ring_with_target(self, target_index, ring):
+		result = [self.rings[target_index][0], ring]
+		if(ring.q > result[0].q):
 			result = [ring, ring]
-			self.cleanup_potential_rings()
-		return result
+		self.rings[target_index] = result
+		return
 		
 	def ring_callback(self, ring_info):
 		#okej, najprej najdeno najmanjso razdaljo do kaksnega obroca.	
 
-		min_dist_to_found, min_found_index 		   = argmin(self.found_rings, ring_dist_normal_fcn, ring_info)
-		min_dist_to_potential, min_potential_index = argmin(self.found_rings, ring_dist_normal_fcn, ring_info)
-
-		min_dist = min(min_dist_to_potential, min_dist_to_found)	
+		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
 		if(min_dist > 0.5): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
 		else:
-			if(min_dist_to_potential < min_dist_to_found):
-				self.potential_rings[min_potential_index] = self.merge_ring_with_target(self.potential_rings[min_potential_index], ring_info)
-			else:
-				self.found_rings[min_found_index] = self.merge_ring_with_target(self.found_rings[min_found_index], ring_info)
+			self.merge_ring_with_target(min_index, ring_info)
 		return
 
 
