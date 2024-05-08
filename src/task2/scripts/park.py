@@ -220,20 +220,28 @@ class park(Node):
 		#V primeru ko nic ne vidimo, se ravnamo po nav2 stacku.
 		#Kadar krog vidimo 
 
+		#TODO
+		#Idealno bi blo, da tole sproti z drugo camero isce obroce po tleh, in si jih shranjuje nekam. Potem ko rabimo iti do zelene, samo poiscemo najblitji
+		#obroc in gremo do njega z nav2, se zmeraj delamo pa iste zadeve kot prej
+
 		circle = self.fit_circle(self.pixel_locations[mask==255])
 		if(circle != None):	
 			circle_quality = circle_quality = math.pow(math.e, -0.1*(abs(78.59 - circle[2])))
 
 			if(circle_quality > 0.2):
 				mask = cv2.arrowedLine(mask, (160,180), (int(circle[0]), int(circle[1])), 127, 3)  
+			
+				error_rotation = positive_angle(-math.pi/2 + math.atan2(circle[1]-height, circle[0]-160)) - math.pi
+				error_fwd 	   = circle[1] - 180
 
-				if(self.park_state != ParkState.PARKED and (self.park_state == ParkState.IDLE or circle_quality > self.circle_quality)):
+
+				if(self.park_state != ParkState.PARKED and (self.park_state == ParkState.IDLE or circle_quality > self.circle_quality or abs(error_rotation) > math.pi/16)):
 					print("Rotating")
 					self.park_state = ParkState.ROTATING
-					self.circle_quality = circle_quality
+					self.circle_quality = max(self.circle_quality, circle_quality)
 
 				if(self.park_state == ParkState.DRIVING):
-					error_raw = circle[1] - 180
+					error_raw = error_fwd
 					error = abs(error_raw)
 					error_dir = -sign(error_raw)
 					kp = 0.01
@@ -253,7 +261,7 @@ class park(Node):
 					self.teleop_pub.publish(cmd_msg)
 
 				if(self.park_state == ParkState.ROTATING):
-					error_raw = positive_angle(-math.pi/2 + math.atan2(circle[1]-height, circle[0]-160)) - math.pi
+					error_raw = error_rotation
 
 					error = abs(error_raw)
 					error_dir = -sign(error_raw)
@@ -272,6 +280,11 @@ class park(Node):
 					else:
 						cmd_msg.angular.z = output
 					self.teleop_pub.publish(cmd_msg)
+		elif(self.park_state != ParkState.PARKED):
+			cmd_msg = Twist()
+			cmd_msg.linear.x = 0.
+			cmd_msg.angular.z = 1.8
+			self.teleop_pub.publish(cmd_msg)
 			
 		cv2.imshow("Mask", mask)
 		#cv2.imshow("Image", img)

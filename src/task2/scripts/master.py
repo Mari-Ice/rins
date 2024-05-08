@@ -173,18 +173,18 @@ class MasterNode(Node):
 		
 		m_time = millis()
 		if(self.state == MasterState.INIT):
-			if((m_time - self.t1) > 5000): #Wait for 5s na zacetku,da se zadeve inicializirajo...
+			if((m_time - self.t1) > 3000): #Wait for n_s na zacetku,da se zadeve inicializirajo...
 				self.setup_camera_for_ring_detection()
 				self.change_state(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
 				self.t1 = m_time
 		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			#zaenkrat samo cakamo 3s
-			if((m_time - self.t1) > 3000):
+			#zaenkrat samo cakamo n_s
+			if((m_time - self.t1) > 4000):
 				self.change_state(MasterState.EXPLORATION)
 				self.t1 = m_time
 		elif(self.state == MasterState.EXPLORATION):
-			if(self.green_ring_found):
+			if(self.ring_count >= 3 and self.green_ring_found):
 				if((m_time - self.t1) > 2000):
 					self.go_to_pose(self.green_ring_position[0], self.green_ring_position[1]) 
 					self.change_state(MasterState.MOVING_TO_GREEN)
@@ -192,7 +192,6 @@ class MasterNode(Node):
 					self.disable_exploration()
 			else:
 				self.t1 = m_time
-
 
 		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
@@ -210,8 +209,11 @@ class MasterNode(Node):
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
 
 		if(ring_info.color_index == 1): #nasli smo zelen ring
-			self.green_ring_found = True
-			self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
+			if(self.green_ring_found): #okej dva zelena wtf
+				pass #TODO
+			else:
+				self.green_ring_found = True
+				self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
 		return
 
 	def send_ring_markers(self):
@@ -290,7 +292,7 @@ class MasterNode(Node):
 			self.found_new_ring(ring)
 		if(ring.q > result[0].q):
 			result = [ring, ring]
-			if(ring.color_index == 1): #Zelen, izboljsas... TODO
+			if(ring.color_index == 1 and ring.q > self.ring_quality_threshold): #Zelen, izboljsas... TODO
 				self.green_ring_position = ring.position
 				
 		self.rings[target_index] = result
@@ -300,8 +302,11 @@ class MasterNode(Node):
 		if(self.state != MasterState.EXPLORATION):
 			return
 
+		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
+		ring_info.color_index = (ring_info.color_index + 3) % 4
+
 		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
-		if(min_dist > 0.5): #TODO, threshold, glede na kvaliteto
+		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
 		else:
 			self.merge_ring_with_target(min_index, ring_info)
