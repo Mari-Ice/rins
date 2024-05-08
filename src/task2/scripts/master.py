@@ -1,11 +1,14 @@
 #!/usr/bin/python3
 
+import math
+import random
 import time
 import rclpy
 from rclpy.node import Node
 import cv2
 import numpy as np
 import tf2_ros
+import os
 
 from enum import Enum
 from cv_bridge import CvBridge, CvBridgeError
@@ -19,14 +22,17 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.duration import Duration
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
+from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task2.msg import RingInfo
+from task2.msg import RingInfo, Waypoint
+from task2.srv import Color
 from std_srvs.srv import Trigger
+from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -62,8 +68,6 @@ def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker.pose.position.z = float(position[2])
 	return marker
 
-	
-
 def argmin(arr, normal_fcn, params):
 	c_min = 100001
 	c_min_index = -1
@@ -96,6 +100,9 @@ class MasterNode(Node):
 		self.park_srv = self.create_client(Trigger, '/park_cmd')
 		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
 		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
+		self.priority_keypoint_pub = self.create_publisher(Waypoint, '/priority_keypoint', QoSReliabilityPolicy.BEST_EFFORT)
+		
+		self.color_talker_srv = self.create_client(Color, '/say_color')
 
 		self.exploration_active = False
 		self.green_ring_position = [0,0]
@@ -108,11 +115,21 @@ class MasterNode(Node):
 		self.state = MasterState.INIT
 		self.change_state(MasterState.INIT)
 
+		self.ros_occupancy_grid = None
+		self.map_np = None
+		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
+		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
+
+		pwd = os.getcwd()
+		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
+		self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
+
 		print("OK")
 		return
 
 	def clock_callback(self, msg):
 		self.time = msg.clock
+		return
 
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
@@ -134,6 +151,7 @@ class MasterNode(Node):
 		goal_msg.behavior_tree = ""
 		self.send_goal_future = self.nav_to_pose_client.send_goal_async(goal_msg)
 		self.send_goal_future.add_done_callback(self.goal_accepted_callback)
+		return
 	
 	def goal_accepted_callback(self, future):
 		goal_handle = future.result()
@@ -142,6 +160,7 @@ class MasterNode(Node):
 			return	
 		self.result_future = goal_handle.get_result_async()
 		self.result_future.add_done_callback(self.get_result_callback)
+		return
 	
 	def get_result_callback(self, future):
 		status = future.result().status
@@ -150,6 +169,7 @@ class MasterNode(Node):
 		else:
 			print(f'Goal reached (according to Nav2).')
 		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
+		return
 
 	def change_state(self, state):
 		old_state = self.state
@@ -157,6 +177,7 @@ class MasterNode(Node):
 		print(f"state -> {MasterState(state).name}")
 
 		self.on_state_change(old_state, state)
+		return
 	
 	def on_state_change(self, old_state, new_state):
 		m_time = millis()
@@ -167,6 +188,57 @@ class MasterNode(Node):
 			self.start_parking()
 		if(new_state == MasterState.EXPLORATION):
 			self.enable_exploration()
+		return
+
+	def map_pixel_to_world(self, x, y, theta=0):
+		assert not self.map_data["resolution"] is None
+		world_x = x*self.map_data["resolution"] + self.map_data["origin"][0]
+		world_y = (self.map_data["height"]-y)*self.map_data["resolution"] + self.map_data["origin"][1]
+		return [world_x, world_y]
+
+	def world_to_map_pixel(self, world_x, world_y, world_theta=0.2):
+		assert self.map_data["resolution"] is not None
+		x = int((world_x - self.map_data["origin"][0])/self.map_data["resolution"])
+		y = int(self.map_data["height"] - (world_y - self.map_data["origin"][1])/self.map_data["resolution"] )
+		return [x, y]
+
+	def map_callback(self, msg):
+		self.get_logger().info(f"Read a new Map (Occupancy grid) from the topic.")
+		self.map_np = np.asarray(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
+		self.map_np = np.flipud(self.map_np)
+		self.map_np[self.map_np==0] = 127
+		self.map_np[self.map_np==100] = 0
+		self.map_data["map_load_time"]=msg.info.map_load_time
+		self.map_data["resolution"]=msg.info.resolution
+		self.map_data["width"]=msg.info.width
+		self.map_data["height"]=msg.info.height
+		quat_list = [msg.info.origin.orientation.x,
+					 msg.info.origin.orientation.y,
+					 msg.info.origin.orientation.z,
+					 msg.info.origin.orientation.w]
+		self.map_data["origin"]=[msg.info.origin.position.x,
+								 msg.info.origin.position.y,
+								 euler_from_quaternion(quat_list)[-1]]
+		return
+
+	def get_valid_close_position(self, ox,oy):
+		mx,my = self.world_to_map_pixel(ox,oy)
+
+		height, width = self.costmap.shape[:2]
+		pixel_locations = np.full((height, width, 2), 0, dtype=np.uint16)
+		for y in range(0, height):
+		    for x in range(0, width):
+		        pixel_locations[y][x] = [x,y]
+
+		mask1 = np.full((height, width), 0, dtype=np.uint8)
+		cv2.circle(mask1,(mx,my),10,255,-1)
+		mask1[self.costmap < 200] = 0
+		pts = pixel_locations[mask1==255]
+		if(len(pts) > 0):
+			center = random.choice(pts)
+			return self.map_pixel_to_world(center[0], center[1])
+		else:
+			return [ox,oy]
 
 	def on_update(self):
 		self.send_ring_markers()
@@ -184,9 +256,11 @@ class MasterNode(Node):
 				self.change_state(MasterState.EXPLORATION)
 				self.t1 = m_time
 		elif(self.state == MasterState.EXPLORATION):
-			if(self.ring_count >= 3 and self.green_ring_found):
+			if(self.ring_count >= 4 and self.green_ring_found):
 				if((m_time - self.t1) > 2000):
-					self.go_to_pose(self.green_ring_position[0], self.green_ring_position[1]) 
+					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
+					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
+					self.go_to_pose(fixed_x, fixed_y) 
 					self.change_state(MasterState.MOVING_TO_GREEN)
 				else:
 					self.disable_exploration()
@@ -203,10 +277,10 @@ class MasterNode(Node):
 
 	def found_new_ring(self, ring_info):
 		self.ring_count += 1
-		#Tu lahko nacelom izrecemo barvo,...
 
 		color_names = ["red", "green", "blue", "black"]
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
+		self.say_color(ring_info.color_index)
 
 		if(ring_info.color_index == 1): #nasli smo zelen ring
 			if(self.green_ring_found): #okej dva zelena wtf
@@ -235,12 +309,14 @@ class MasterNode(Node):
 		
 		self.ring_markers_pub.publish(ma)	
 		self.cleanup_potential_rings()
+		return
 
 	def setup_camera_for_ring_detection(self):
 		msg = String()
 		msg.data = "look_for_rings"
 		self.arm_pos_pub.publish(msg)
 		return
+
 	def setup_camera_for_parking(self):
 		msg = String()
 		msg.data = "look_for_parking2"
@@ -257,11 +333,20 @@ class MasterNode(Node):
 			req = Trigger.Request()
 			self.enable_exploration_srv.call_async(req)
 			self.exploration_active = True
+		return 
+
 	def disable_exploration(self):
 		if(self.exploration_active):
 			req = Trigger.Request()
 			self.disable_exploration_srv.call_async(req)
 			self.exploration_active = False
+		return
+
+	def say_color(self, color_index):
+		req = Color.Request()
+		req.color = color_index
+		self.color_talker_srv.call_async(req)
+		return
 
 	#TODO: to se da implementirat dosti lepse in hitrejse, ...
 	#TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
@@ -284,6 +369,25 @@ class MasterNode(Node):
 		self.cleanup_potential_rings()
 		if(ring_info.q > self.ring_quality_threshold):
 			self.found_new_ring(ring_info)
+		else: #Pojdi od blizje pogledat. (Priority Keypoint)
+			rx, ry = self.get_valid_close_position(ring_info.position[0], ring_info.position[1])
+			if(rx == ring_info.position[0] and ry == ring_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
+				return
+
+			wp = Waypoint()
+			wp.x = rx
+			wp.y = ry
+			wp.yaw = 0. #TODO, theta.
+
+			#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,... #TODO to bi se lahko lepse v autonom. nodu naredlo
+			self.priority_keypoint_pub.publish(wp)
+			wp.yaw = math.pi/2 
+			self.priority_keypoint_pub.publish(wp)
+			wp.yaw = math.pi 
+			self.priority_keypoint_pub.publish(wp)
+			wp.yaw = 3*math.pi/2
+			self.priority_keypoint_pub.publish(wp)
+			
 		return
 
 	def merge_ring_with_target(self, target_index, ring):
@@ -303,7 +407,7 @@ class MasterNode(Node):
 			return
 
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
-		ring_info.color_index = (ring_info.color_index + 3) % 4
+		#ring_info.color_index = (ring_info.color_index + 1) % 4
 
 		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto

@@ -86,7 +86,7 @@ class MapGoals(Node):
 		self.faces = self.create_subscription(Marker, '/detected_faces', self.add_face, 10)
 		self.rings = self.create_subscription(MarkerArray, '/ring', self.add_ring_callback, 10)
 		self.final_keypoint_sub = self.create_subscription(Waypoint, '/final_keypoint', self.final_waypoint_callback, 10)
-		self.priority_keypoint_sub = self.create_subscription(Waypoint, '/priority_keypoint', self.priority_waypoint_callback, 10)
+		self.priority_keypoint_sub = self.create_subscription(Waypoint, '/priority_keypoint', self.priority_waypoint_callback, 50)
 		# Create a timer, to do the main work.
 		self.timer = self.create_timer(timer_period, self.timer_callback)
 
@@ -102,13 +102,11 @@ class MapGoals(Node):
 
 	def priority_waypoint_callback(self, waypoint : Waypoint):
 		self.get_logger().info(f"Received priority waypoint: {waypoint}")
-		# goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
-		self.priority_keypoints.append([waypoint.x, waypoint.y, 0])
+		self.priority_keypoints.append([waypoint.x, waypoint.y, waypoint.yaw])
 
 	def final_waypoint_callback(self, waypoint : Waypoint):
 		self.get_logger().info(f"Received final waypoint: {waypoint}")
-		# goal_pose = self.generate_goal_message(waypoint.x, waypoint.y, 0) # TODO: theta
-		self.priority_keypoints.append([waypoint.x, waypoint.y, 0])
+		self.priority_keypoints.append([waypoint.x, waypoint.y, waypoint.yaw])
 
 	def enable_navigation_callback(self, request, response):
 		self.enable_navigation = True

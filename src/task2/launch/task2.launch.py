@@ -37,6 +37,11 @@ def generate_launch_description():
             executable='autonomous_explorer.py',
             name='autonomous_explorer'
         ),
+        Node(
+            package='task2',
+            executable='park.py',
+            name='visually_assisted_parking'
+        ),
     ])
 
     
