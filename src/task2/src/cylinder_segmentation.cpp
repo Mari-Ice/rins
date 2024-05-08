@@ -34,7 +34,7 @@ typedef pcl::PointXYZRGB PointT;
 int marker_id = 0;
 float error_margin = 0.02;  // 2 cm margin for error
 float target_radius = 0.11;
-bool verbose = true;
+bool verbose = false;
 
 // set up PCL RANSAC objects
 

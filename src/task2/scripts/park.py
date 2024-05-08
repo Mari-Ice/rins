@@ -282,7 +282,7 @@ class park(Node):
 					self.teleop_pub.publish(cmd_msg)
 		elif(self.park_state != ParkState.PARKED):
 			cmd_msg = Twist()
-			cmd_msg.linear.x = 0.1
+			cmd_msg.linear.x = 0.2
 			cmd_msg.angular.z = 1.8
 			self.teleop_pub.publish(cmd_msg)
 			
