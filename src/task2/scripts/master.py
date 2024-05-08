@@ -34,6 +34,8 @@ from task2.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
+MIN_DETECTED_RINGS = 4
+
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 		  reliability=QoSReliabilityPolicy.RELIABLE,
@@ -82,7 +84,7 @@ def ring_dist_normal_fcn(ring_elt, new_ring):
 	return np.linalg.norm(np.array(ring_elt[0].position) - np.array(new_ring.position))
 
 def millis():
-    return round(time.time() * 1000)	
+	return round(time.time() * 1000)	
 
 class MasterNode(Node):
 	def __init__(self):
@@ -227,8 +229,8 @@ class MasterNode(Node):
 		height, width = self.costmap.shape[:2]
 		pixel_locations = np.full((height, width, 2), 0, dtype=np.uint16)
 		for y in range(0, height):
-		    for x in range(0, width):
-		        pixel_locations[y][x] = [x,y]
+			for x in range(0, width):
+				pixel_locations[y][x] = [x,y]
 
 		mask1 = np.full((height, width), 0, dtype=np.uint8)
 		cv2.circle(mask1,(mx,my),10,255,-1)
@@ -256,7 +258,7 @@ class MasterNode(Node):
 				self.change_state(MasterState.EXPLORATION)
 				self.t1 = m_time
 		elif(self.state == MasterState.EXPLORATION):
-			if(self.ring_count >= 4 and self.green_ring_found):
+			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
 				if((m_time - self.t1) > 2000):
 					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
 					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
