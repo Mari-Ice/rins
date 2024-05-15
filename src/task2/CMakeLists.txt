@@ -58,7 +58,7 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/autonomous_explorer.py
-  scripts/color_talker.py
+  scripts/talker.py
   scripts/ring_detection.py
   scripts/master.py
   scripts/park.py
