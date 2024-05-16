@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-import time
-import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSReliabilityPolicy
@@ -13,7 +11,7 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
-from sensor_msgs.msg import Image, PointCloud2, LaserScan
+from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 
 from visualization_msgs.msg import Marker
@@ -33,19 +31,11 @@ import sys
 
 def clamp(x, minx, maxx):
 	return min(max(x, minx), maxx)
-def deg2rad(deg):
-	return (deg/180.0) * math.pi
-def pos_angle(rad):
-	while(rad > 2*math.pi):
-		rad -= 2*math.pi
-	while(rad < 0):
-		rad += 2*math.pi
-	return rad
-def millis():
-	return round(time.time() * 1000)	
 
 class detect_faces(Node):
 	face_id = 0
+	min_y = 1000
+	max_y = 0
 		
 	def __init__(self):
 		super().__init__('detect_faces')
@@ -63,7 +53,7 @@ class detect_faces(Node):
 		self.scan = None
 
 		self.rgb_image_sub = self.create_subscription(Image, "/oakd/rgb/preview/image_raw", self.rgb_callback, qos_profile_sensor_data)
-		self.laser_sub = self.create_subscription(LaserScan, "/scan_filtered", self.laser_callback, qos_profile_sensor_data)
+		self.pointcloud_sub = self.create_subscription(PointCloud2, "/oakd/rgb/preview/depth/points", self.pointcloud_callback, qos_profile_sensor_data)
 
 		marker_topic = "/people_marker"
 		self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
@@ -83,7 +73,7 @@ class detect_faces(Node):
 		self.faces = []
 
 		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
-		self.t1 = millis()
+		self.start_time = self.get_clock().now()
 
 	def rgb_callback(self, data):
 
@@ -120,72 +110,104 @@ class detect_faces(Node):
 		except CvBridgeError as e:
 			print(e)
 
-	def get_point(self, laser, x):
-		width = 320 #TODO, to bi lahko vzel is slike
-		angle_increment = laser.angle_increment
-		fov = math.pi/2 #TODO eksperimantalno ugotovi pravi FOV
-		fi = (fov * (0.5 - x/width)) #TODO, sfericna interpolacija namesto linearne
+	def pointcloud_callback(self, data):
 
-		n = (int(fi/angle_increment) + 100)
-		while(n > len(laser.ranges)):
-			n -= len(laser.ranges)
-		while(n < 0):
-			n+=len(laser.ranges)
+		# get point cloud attributes
+		height = data.height
+		width = data.width
+		point_step = data.point_step
+		row_step = data.row_step		
 
-		rn = laser.ranges[n]
-		fi1 = fi - deg2rad(90)
-		return np.array([ rn * math.cos(fi1), rn* math.sin(fi1), 0 ])
-
-	def laser_callback(self, data):
-		if(millis() - self.t1 < 4000): #pocakaj, da se zadeve inicializirajo.
-			return
+		# print(f"pointcloud size: {width} x {height}")
 
 		# Gremo cez vse face, ki smo jih zaznali v zadnjem frame-u
 		for x,y,z,w in self.faces:
-			# x = clamp(x, 0, width-1)
-			# z = clamp(z, 0, width-1)
-			# y = clamp(y, 0, height-1)
-			# w = clamp(y, 0, height-1)
+			x = clamp(x, 0, width-1)
+			z = clamp(z, 0, width-1)
+			y = clamp(y, 0, height-1)
+			w = clamp(y, 0, height-1)
 
 			if(abs(x-y) < 15 or abs(z-w) < 10):
 				continue
 
-			d1 = self.get_point(data, x)
-			d2 = self.get_point(data, z)
-			
-			if(len(d1) == 0 or len(d2) == 0):
-				return
+			# get 3-channel representation of the poitn cloud in numpy format
+			a = pc2.read_points_numpy(data, field_names= ("x", "y", "z"))
+			a = a.reshape((height,width,3))
 
-			#ce so robovi slike prevec dalec narazen ali pa preblizu skupaj
-			if(np.linalg.norm(d2-d1) > 0.5):
+			# Ker so slike lahko postavljene razlicno, enkrat gledajo ces steno, drugic ne...,
+			# Zberemo y koordianto tako, da bi naj naceloma vedno delalo.
+			# Druga resistev bi bla, da dobis y koordinato tako, da mapiras laser na sliko in vzames tisti y.
+
+			#print(f"pixels: ({x},{y}), ({z},{w})")
+
+
+			# Dokaj dirty trick, z bisekcijo, najdemo koordinato z ustrezno z visino tj. na sredini stene
+			# Stena je na visini 0.09m, visina stene pa je 0.25 m
+			# torej zelimo najti visino 0.09 + 0.125 = 0.215 (+- 0.05)
+		
+			center_x = int((x+z)*0.5)
+			y = None
+
+			for i in range(110, 170):
+				value = a[i, center_x, 2]
+				#print(f"value: {value}")
+				if(abs(value - (-0.1)) < 0.05):
+					y = i
+					break
+			
+			if(y is None): 
+				print("Could not found proper y.")
 				continue
-			if(np.linalg.norm(d2-d1) < 0.05):
-				continue
-			#Ce je obraz dalec od robota, ga bomo zazanli rajsi kdaj ko bomo blizje ...
-			if(np.linalg.norm(d1) > 2.6): 
-				continue
+
+			# TODO
+			# Tu bi zdej lahko se preveril ali je slika na ravni povrsini.
+			# Tj ali so tocke med d1 in d2 na daljici
+
+			d1 = a[y,x]
+			d2 = a[y,z]
+		
+			detect_faces.min_y = min(detect_faces.min_y, y)
+			detect_faces.max_y = max(detect_faces.max_y, y)
+
+			print(f"y: {y}, min_y: {detect_faces.min_y}, max_y: {detect_faces.max_y}, d1: {d1}, d2: {d2}")
 
 			p1 = PointStamped()
-			p1.header.frame_id = "/rplidar_link"
+			p1.header.frame_id = "/oakd_link"
 			p1.header.stamp = self.get_clock().now().to_msg()
 			p1.point.x = float(d1[0])
 			p1.point.y = float(d1[1])
 			p1.point.z = float(d1[2])
 
 			p2 = PointStamped()
-			p2.header.frame_id = "/rplidar_link"
+			p2.header.frame_id = "/oakd_link"
 			p2.header.stamp = self.get_clock().now().to_msg()
 			p2.point.x = float(d2[0])
 			p2.point.y = float(d2[1])
 			p2.point.z = float(d2[2])
 
+			p3 = PointStamped() #robot global pos
+			p3.header.frame_id = "/oakd_link"
+			p3.header.stamp = self.get_clock().now().to_msg()
+			p3.point.x = 0.0
+			p3.point.y = 0.0
+			p3.point.z = 0.0
+
+			if(np.linalg.norm(d2-d1) > 0.5):
+				continue
+			if(np.linalg.norm(d2-d1) < 0.05):
+				continue
+
+
+		
+			#print(data.header.stamp, rclpy.time.Time())
 			#zdej pa te tocke transformiramo v globalne (map) koordinate
 			time_now = rclpy.time.Time()
 			timeout = Duration(seconds=10.0)
-			trans = self.tf_buffer.lookup_transform("map", "rplidar_link", time_now, timeout)	
+			trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)	
 
 			p1 = tfg.do_transform_point(p1, trans)
 			p2 = tfg.do_transform_point(p2, trans)
+			p3 = tfg.do_transform_point(p3, trans)
 
 			d1 = np.array([
 				p1.point.x,
@@ -197,6 +219,14 @@ class detect_faces(Node):
 				p2.point.y,
 				p2.point.z
 			]);
+			d3 = np.array([
+				p3.point.x,
+				p3.point.y,
+				p3.point.z
+			]);
+
+			if(np.linalg.norm(d3-d1) > 2.6): #Ce je obraz dalec od robota, ga bomo zazanli rajsi kdaj ko bomo blizje ...
+				continue
 
 			marker = Marker()
 
@@ -253,6 +283,10 @@ class detect_faces(Node):
 			marker.header.frame_id = "/map"
 			marker.header.stamp = data.header.stamp
 			
+			#TODO: ugotovi kako dobit pravi cajt, ker ce das clock().now() in uporabis karkoli razen /map zadeva ne dela...	
+			#marker.header.frame_id = "/oakd_link"
+			#marker.header.stamp = self.get_clock().now().to_msg()
+
 			marker.type = 0
 			marker.id = detect_faces.face_id
 			detect_faces.face_id+=1
@@ -283,6 +317,7 @@ class detect_faces(Node):
 			marker.points.append(startpoint)
 			marker.points.append(endpoint)
 			
+
 			self.marker_pub.publish(marker)
 
 def main():

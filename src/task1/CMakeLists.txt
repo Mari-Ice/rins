@@ -38,6 +38,7 @@ install(PROGRAMS
   scripts/people_manager.py
   scripts/detect_people.py
   scripts/talker.py
+  scripts/test.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_export_dependencies(${dependencies} rosidl_default_runtime)
