@@ -41,6 +41,8 @@ amcl_pose_qos = QoSProfile(
 #	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
 
 
+def clamp(x, minx, maxx):
+	return min(max(x, minx), maxx)
 def deg2rad(deg):
 	return (deg/180.0) * math.pi
 def pos_angle(rad):
@@ -49,6 +51,8 @@ def pos_angle(rad):
 	while(rad < 0):
 		rad += 2*math.pi
 	return rad
+def millis():
+	return round(time.time() * 1000)	
 
 class Test(Node):
 	def __init__(self):
@@ -67,12 +71,11 @@ class Test(Node):
 		self.tf_buffer = Buffer()
 		self.tf_listener = TransformListener(self.tf_buffer, self)
 
-		self.rgb_sub = message_filters.Subscriber(self, Image,		 "/top_camera/rgb/preview/image_raw")
-		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/top_camera/rgb/preview/depth/points")
-		self.laser_sub  = message_filters.Subscriber(self, LaserScan, "/scan_filtered")
+		#self.rgb_sub = message_filters.Subscriber(self, Image,		 "/top_camera/rgb/preview/image_raw")
+		self.laser_sub  = message_filters.Subscriber(self, LaserScan, "/scan")
 
-		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.laser_sub], 10, 0.3, allow_headerless=False) 
-		self.ts.registerCallback(self.rgb_pc_callback)
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.laser_sub], 10, 0.3, allow_headerless=False) 
+		self.ts.registerCallback(self.rgb_laser_callback)
 
 		self.marker_pub = self.create_publisher(Marker, "/test", QoSReliabilityPolicy.BEST_EFFORT)
 
@@ -82,31 +85,31 @@ class Test(Node):
 	def nothing(self, data):
 		return
 
-
 	def get_point(self, laser, x):
-		width = 320 #TODO, to bi lahko vzel is slike
-		angle_increment = laser.angle_increment
-		fov = math.pi/2 #TODO eksperimantalno ugotovi pravi FOV
+		width = 250 #TODO, to bi lahko vzel is slike
+		angle_increment = laser.angle_increment #TODO, to je zdej za pravega robota...
+		fov = deg2rad(55) 
+		fi = (fov * (0.5 - x/width)) 
 
-		fi = pos_angle(fov * (0.5 - x/width)) #TODO, sfericna interpolacija namesto linearne
-		n = (int(fi/angle_increment) + 100) % len(laser.ranges)
+		n = (int(fi/angle_increment) + 270)
+		while(n > len(laser.ranges)):
+			n -= len(laser.ranges)
+		while(n < 0):
+			n+=len(laser.ranges)
 
 		rn = laser.ranges[n]
 		fi1 = fi - deg2rad(90)
-		return [ rn * math.cos(fi1), rn* math.sin(fi1) ]
+		return np.array([ rn * math.cos(fi1), rn* math.sin(fi1), 0 ])
 
-
-	def rgb_pc_callback(self, rgb, pc, laser):
-		# if((time.time() - self.start_time) < 3):
-		# 	return
+	def rgb_laser_callback(self, laser):
 
 		#print(laser.ranges)
-		point = self.get_point(laser, 320/2)
+		point = self.get_point(laser, 250/2)
 
 		marker = Marker()
 
 		marker.header.frame_id = "/rplidar_link"
-		marker.header.stamp = rgb.header.stamp
+		marker.header.stamp = laser.header.stamp
 
 		marker.type = 2
 		marker.id = 1
@@ -138,18 +141,6 @@ class Test(Node):
 		marker.pose.position.x = float(point[0])
 		marker.pose.position.y = float(point[1])
 		self.marker_pub.publish(marker)
-
-
-		#cv2.waitKey(1)
-		img = self.bridge.imgmsg_to_cv2(rgb, "bgr8")
-		height	 = pc.height
-		width	  = pc.width
-		point_step = pc.point_step
-		row_step   = pc.row_step		
-		xyz = pc2.read_points_numpy(pc, field_names= ("y", "z", "x"))
-		xyz = xyz.reshape((height,width,3))  
-
-		#obrezemo vse slike, da je lazje za racunat.
 		return
 
 def main():

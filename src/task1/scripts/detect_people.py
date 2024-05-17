@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 
 from geometry_msgs.msg import Point
+import message_filters
 
 from ultralytics import YOLO
 import sys
@@ -56,14 +57,21 @@ class detect_faces(Node):
 				('device', ''),
 		])
 
+		self.img_height = 0
+		self.img_width = 0
+		self.cam_fov_y = deg2rad(55)
+		self.cam_fov_x = deg2rad(55)
+
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value
 
 		self.bridge = CvBridge()
 		self.scan = None
 
-		self.rgb_image_sub = self.create_subscription(Image, "/oakd/rgb/preview/image_raw", self.rgb_callback, qos_profile_sensor_data)
-		self.laser_sub = self.create_subscription(LaserScan, "/scan_filtered", self.laser_callback, qos_profile_sensor_data)
+		self.rgb_image_sub = message_filters.Subscriber(self, Image, "/oakd/rgb/preview/image_raw")
+		self.laser_sub  = message_filters.Subscriber(self, LaserScan, "/scan")
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub, self.laser_sub], 10, 0.05, allow_headerless=False) 
+		self.ts.registerCallback(self.rgb_laser_callback)
 
 		marker_topic = "/people_marker"
 		self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
@@ -85,14 +93,35 @@ class detect_faces(Node):
 		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
 		self.t1 = millis()
 
-	def rgb_callback(self, data):
+		cv2.namedWindow("image", cv2.WINDOW_NORMAL)
 
+	def generate_mask(self, laser):
+		if(self.img_height == 0 or self.img_width == 0):
+			return
+
+		visina = 0.15 ##TODO use get_point(x)
+		fov = self.cam_fov_y
+
+		mask = np.zeros((self.img_height, self.img_width), dtype=np.uint8)
+
+		for x in range(self.img_width):
+			rn = np.linalg.norm(self.get_point(laser, x))
+			y = rn * math.tan(fov/2)
+			meja = int(self.img_height/2 * (1 - visina/y))
+			mask[meja:,x] = 255
+		return mask
+
+	def rgb_laser_callback(self, rgb_data, laser_data):
 		self.faces = []
 
 		try:
-			cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+			cv_image = self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
 
-			# self.get_logger().info(f"Running inference on image...")
+			self.img_height = cv_image.shape[0]
+			self.img_width = cv_image.shape[1]
+
+			mask = self.generate_mask(laser_data)
+			cv_image[mask == 0] = 255
 
 			# run inference
 			res = self.model.predict(cv_image, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
@@ -120,13 +149,19 @@ class detect_faces(Node):
 		except CvBridgeError as e:
 			print(e)
 
-	def get_point(self, laser, x):
-		width = 320 #TODO, to bi lahko vzel is slike
-		angle_increment = laser.angle_increment
-		fov = math.pi/2 #TODO eksperimantalno ugotovi pravi FOV
-		fi = (fov * (0.5 - x/width)) #TODO, sfericna interpolacija namesto linearne
+		self.find_faces(laser_data)
 
-		n = (int(fi/angle_increment) + 100)
+	def get_point(self, laser, x):
+		if(self.img_width == 0):
+			return
+
+		angle_increment = laser.angle_increment
+		fov = self.cam_fov_x
+		fi = (fov * (0.5 - x/self.img_width)) 
+		n = (int(fi/angle_increment) + 270)
+		
+		#print(f"x: {x}, n: {n}, fi: {fi}")
+
 		while(n > len(laser.ranges)):
 			n -= len(laser.ranges)
 		while(n < 0):
@@ -136,7 +171,10 @@ class detect_faces(Node):
 		fi1 = fi - deg2rad(90)
 		return np.array([ rn * math.cos(fi1), rn* math.sin(fi1), 0 ])
 
-	def laser_callback(self, data):
+	def find_faces(self, data):
+		if(self.img_height == 0):
+			return
+
 		if(millis() - self.t1 < 4000): #pocakaj, da se zadeve inicializirajo.
 			return
 

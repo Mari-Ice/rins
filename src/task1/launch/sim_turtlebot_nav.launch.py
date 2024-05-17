@@ -34,7 +34,7 @@ ARGUMENTS = [
    
    # DeclareLaunchArgument('world', default_value='dis',
    #                        description='Ignition World'),
-   DeclareLaunchArgument('world', default_value='demo1',
+   DeclareLaunchArgument('world', default_value='dis',
                           description='Ignition World'),
 
 	DeclareLaunchArgument('model', default_value='standard',
