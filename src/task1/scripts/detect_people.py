@@ -63,10 +63,8 @@ class detect_faces(Node):
 
 		self.img_height = 0
 		self.img_width = 0
-		#self.cam_fov_y = deg2rad(55) #TODO, odvisno od naprave.
-		#self.cam_fov_x = deg2rad(55)
-		self.cam_fov_y = deg2rad(90) 
-		self.cam_fov_x = deg2rad(90)
+		self.cam_fov_y = deg2rad(55) #TODO, odvisno od naprave.
+		self.cam_fov_x = deg2rad(55)
 
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value

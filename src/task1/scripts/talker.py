@@ -37,7 +37,7 @@ class Talker(Node):
 		except Exception as e:
 			response.success = False
 			response.message = str(e)
-			sleep(1)
+			sleep(3)
 		finally:
 			return response
 	

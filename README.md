@@ -27,6 +27,7 @@
 		* Speech recognition
 
 # Poganjanje na robotu
+	* NUJNO NA TURTLEBOT WIFIJU
 	* bash src/dis_tutorial5/configure_discovery.sh < /dev/tty 
 	* ros2 launch turtlebot4_navigation localization.launch.py map:=src/dis_tutorial3/maps/non_sim/map.yaml
 	* rviz2 -> set initial pose (Pose estimate)
