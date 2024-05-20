@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 
 import os
-
+from time import sleep
 import rclpy
 from rclpy.node import Node
 from rclpy.exceptions import ParameterNotDeclaredException
@@ -37,6 +37,7 @@ class Talker(Node):
 		except Exception as e:
 			response.success = False
 			response.message = str(e)
+			sleep(1)
 		finally:
 			return response
 	

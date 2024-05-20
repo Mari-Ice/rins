@@ -104,14 +104,14 @@ class detect_faces(Node):
 		self.t_height = 0.15
 
 	def change_fovX(self, val):
-		self.cam_fov_x = max(deg2rad(val), 1)
+		self.cam_fov_x = deg2rad(max(val, 1))
 	def change_fovY(self, val):
-		self.cam_fov_y = max(deg2rad(val), 1)
+		self.cam_fov_y = deg2rad(max(val, 1))
 	def change_height(self, val):
 		self.t_height = val*0.01
 
 	def remove_noise(self, meje_arr):
-		filter_size = 9
+		filter_size = 15
 		new_meje = meje_arr.copy()
 		for x in range(len(meje_arr)-filter_size):
 			nset = []

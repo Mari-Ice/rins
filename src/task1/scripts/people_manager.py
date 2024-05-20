@@ -188,7 +188,7 @@ class detect_faces(Node):
 
 						marker_normal = -face.normal
 						#q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
-						q = quaternion_from_euler(0, 0, math.atan2(vy - face.origin[1], vx - face.origin[0]))
+						q = quaternion_from_euler(0, 0, math.atan2(face.origin[1]-vy, face.origin[0]-vx))
 						point.pose.orientation.x = q[0]
 						point.pose.orientation.y = q[1]
 						point.pose.orientation.z = q[2]
