@@ -88,16 +88,9 @@ class detect_faces(Node):
 		if not (np.isfinite(new_face.origin).all() and np.isfinite(new_face.normal).all()):
 			return
 
-		# detect_faces.rolling_origin   = 0.9 * detect_faces.rolling_origin   + 0.1 * new_face.origin	
-		# if(np.linalg.norm(detect_faces.rolling_origin - new_face.origin) > 0.05):
-		# 	return
-
 		notFound = True
 		for face in self.faces:
-			if(face.compare(new_face)): #naceloma bi blo boljse, ce bi sli cez vse in poiskai tistega, ki najbolj ustreza, 
-										#ce so meje nastavljene prevec nenatancno, se zgodi, da ustreza vecim obrazom ...
-				#face.origin = 0.9 * face.origin + 0.1 * new_face.origin
-                #face.normal = 0.8 * face.normal + 0.2 * new_face.normal Tu je treba se normirat, ker taksan vsota ne ohrani razdalje...
+			if(face.compare(new_face)):  
 				face.num += 1
 				notFound = False
 				if(not face.visited):
@@ -116,11 +109,13 @@ class detect_faces(Node):
 						point.color.g = 1.0
 						point.color.b = 0.0
 						point.color.a = 1.0
+
+						#TODO: pravilni polozaj, da nismo v steni...
+
 						point.pose.position.x = face.origin[0] + (face.normal[0] * 0.5)
 						point.pose.position.y = face.origin[1] + (face.normal[1] * 0.5)
 						point.pose.position.z = face.origin[2] + (face.normal[2] * 0.5)
 
-						# marker should be turned towards the face (opposite from the normal)
 						marker_normal = -face.normal
 						q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
 						point.pose.orientation.x = q[0]

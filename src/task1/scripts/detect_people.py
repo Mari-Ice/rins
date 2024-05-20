@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import statistics
+import random
 import time
 import math
 import rclpy
@@ -108,21 +110,39 @@ class detect_faces(Node):
 	def change_height(self, val):
 		self.t_height = val*0.01
 
+	def remove_noise(self, meje_arr):
+		filter_size = 9
+		new_meje = meje_arr.copy()
+		for x in range(len(meje_arr)-filter_size):
+			nset = []
+			for i in range(filter_size):
+				nset.append(meje_arr[x + i])
+			new_meje[x+int(filter_size/2)] = int(statistics.median(nset))
+		return new_meje
+
 	def generate_mask(self, laser):
 		if(self.img_height == 0 or self.img_width == 0):
 			return
 
-		#visina = 0.15
 		visina = self.t_height
 		fov = self.cam_fov_y
+		meje_arr = []
 		mask = np.zeros((self.img_height, self.img_width), dtype=np.uint8)
 
 		for x in range(self.img_width):
 			rn = np.linalg.norm(self.get_point(laser, x))
 			y = rn * math.tan(fov/2)
 			meja = int(self.img_height/2 * (1 - visina/y))
-			mask[meja:,x] = 255
-		return mask
+			
+			# if(random.uniform(0,1) < 0.01): #Dodamo sum v simulciji, da lahko testiramo odpravljanje suma.. TODO odstrani potem tole
+			# 	meja = random.randrange(0,self.img_height)
+			
+			meje_arr.append(meja)
+
+		meje_arr = self.remove_noise(meje_arr)
+		for x in range(self.img_width):
+			mask[meje_arr[x]:,x] = 255
+		return (mask)
 
 	def rgb_laser_callback(self, rgb_data, laser_data):
 		self.faces = []
