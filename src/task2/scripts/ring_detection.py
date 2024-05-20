@@ -136,9 +136,8 @@ class RingDetection(Node):
 		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
 		# cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
 		
-		cv2.setTrackbarPos("A", "Image", 100)
-		cv2.setTrackbarPos("B", "Image", 200)
-
+		cv2.createTrackbar('A', "Image", 0, 1000, nothing)
+		cv2.createTrackbar('B', "Image", 0, 1000, nothing)
 
 		self.start_time = time.time()
 

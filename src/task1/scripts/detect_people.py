@@ -44,6 +44,8 @@ def pos_angle(rad):
 	return rad
 def millis():
 	return round(time.time() * 1000)	
+def nothing():
+	return
 
 class detect_faces(Node):
 	face_id = 0
@@ -59,8 +61,10 @@ class detect_faces(Node):
 
 		self.img_height = 0
 		self.img_width = 0
-		self.cam_fov_y = deg2rad(55)
-		self.cam_fov_x = deg2rad(55)
+		#self.cam_fov_y = deg2rad(55) #TODO, odvisno od naprave.
+		#self.cam_fov_x = deg2rad(55)
+		self.cam_fov_y = deg2rad(90) 
+		self.cam_fov_x = deg2rad(90)
 
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value
@@ -81,27 +85,36 @@ class detect_faces(Node):
 		marker_topic2 = "/img2"
 		self.marker_pub2 = self.create_publisher(Marker, marker_topic2, QoSReliabilityPolicy.BEST_EFFORT)
 
-
-		# For listening and loading the TF
 		self.tf_buffer = Buffer()
 		self.tf_listener = TransformListener(self.tf_buffer, self)
 
 		self.model = YOLO("yolov8n.pt")
 
 		self.faces = []
-
 		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
 		self.t1 = millis()
 
-		cv2.namedWindow("image", cv2.WINDOW_NORMAL)
+		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+
+		cv2.createTrackbar('FovX', "Image", 55, 130, self.change_fovX)
+		cv2.createTrackbar('FovY', "Image", 55, 130, self.change_fovY)
+		cv2.createTrackbar('Height', "Image", 15, 200, self.change_height)
+		self.t_height = 0.15
+
+	def change_fovX(self, val):
+		self.cam_fov_x = max(deg2rad(val), 1)
+	def change_fovY(self, val):
+		self.cam_fov_y = max(deg2rad(val), 1)
+	def change_height(self, val):
+		self.t_height = val*0.01
 
 	def generate_mask(self, laser):
 		if(self.img_height == 0 or self.img_width == 0):
 			return
 
-		visina = 0.15 ##TODO use get_point(x)
+		#visina = 0.15
+		visina = self.t_height
 		fov = self.cam_fov_y
-
 		mask = np.zeros((self.img_height, self.img_width), dtype=np.uint8)
 
 		for x in range(self.img_width):
@@ -140,7 +153,7 @@ class detect_faces(Node):
 				cv_image = cv2.rectangle(cv_image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), self.detection_color, 3)
 				self.faces.append((int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])))
 
-			cv2.imshow("image", cv_image)
+			cv2.imshow("Image", cv_image)
 			key = cv2.waitKey(1)
 			if key==27: #Esc
 				print("exiting")
@@ -152,24 +165,12 @@ class detect_faces(Node):
 		self.find_faces(laser_data)
 
 	def get_point(self, laser, x):
-		if(self.img_width == 0):
-			return
-
-		angle_increment = laser.angle_increment
-		fov = self.cam_fov_x
-		fi = (fov * (0.5 - x/self.img_width)) 
-		n = (int(fi/angle_increment) + 270)
-		
-		#print(f"x: {x}, n: {n}, fi: {fi}")
-
-		while(n > len(laser.ranges)):
-			n -= len(laser.ranges)
-		while(n < 0):
-			n+=len(laser.ranges)
-
+		fi_screen = (self.cam_fov_x * (0.5 - x/self.img_width))
+		fi = fi_screen - math.pi/2
+		n = int(pos_angle(fi - laser.angle_min)/laser.angle_increment) 
 		rn = laser.ranges[n]
-		fi1 = fi - deg2rad(90)
-		return np.array([ rn * math.cos(fi1), rn* math.sin(fi1), 0 ])
+		#print(f"x: {x}, n: {n}, fi: {fi}")
+		return np.array([ rn*math.cos(fi), rn*math.sin(fi), 0 ])
 
 	def find_faces(self, data):
 		if(self.img_height == 0):
@@ -180,11 +181,6 @@ class detect_faces(Node):
 
 		# Gremo cez vse face, ki smo jih zaznali v zadnjem frame-u
 		for x,y,z,w in self.faces:
-			# x = clamp(x, 0, width-1)
-			# z = clamp(z, 0, width-1)
-			# y = clamp(y, 0, height-1)
-			# w = clamp(y, 0, height-1)
-
 			if(abs(x-y) < 15 or abs(z-w) < 10):
 				continue
 

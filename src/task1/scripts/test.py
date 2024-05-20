@@ -64,6 +64,9 @@ class Test(Node):
 				('device', ''),
 		])
 
+		self.cam_fov_y = deg2rad(90) #TODO, odvisno od naprave.
+		self.cam_fov_x = deg2rad(90)
+
 		self.bridge = CvBridge()
 
 		# For listening and loading the TF
@@ -86,20 +89,13 @@ class Test(Node):
 		return
 
 	def get_point(self, laser, x):
-		width = 250 #TODO, to bi lahko vzel is slike
-		angle_increment = laser.angle_increment #TODO, to je zdej za pravega robota...
-		fov = deg2rad(55) 
-		fi = (fov * (0.5 - x/width)) 
-
-		n = (int(fi/angle_increment) + 270)
-		while(n > len(laser.ranges)):
-			n -= len(laser.ranges)
-		while(n < 0):
-			n+=len(laser.ranges)
-
+		fi_screen = (self.cam_fov_x * (0.5 - x/self.img_width))
+		fi = fi_screen - math.pi/2
+		n = int(pos_angle(fi - laser.angle_min)/laser.angle_increment) 
 		rn = laser.ranges[n]
-		fi1 = fi - deg2rad(90)
-		return np.array([ rn * math.cos(fi1), rn* math.sin(fi1), 0 ])
+		#print(f"x: {x}, n: {n}, fi: {fi}")
+		return np.array([ rn*math.cos(fi), rn*math.sin(fi), 0 ])
+
 
 	def rgb_laser_callback(self, laser):
 
