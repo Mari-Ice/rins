@@ -239,7 +239,7 @@ class RingDetection(Node):
 				avg_color_dist = np.mean(color_dist_sq)
 
 				q_colors	= math.exp(-0.0004*avg_color_dist)
-				q_size	  = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
+				q_size	    = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
 				q_okroglost = math.exp(-3.27*(1-min(w,h)/max(w,h))**2)
 				q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(ring_position))**2)
 

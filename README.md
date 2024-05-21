@@ -6,6 +6,8 @@
 		* Keypoint follower
 		* Find safe park positions
 		* Fixed mask artifacts
+		* Spining at keypoints
+		* Rotate to face more accurately
 		
 	* Task2:
 		* Parkiranje, ko si v blizini parkirnega mesta
@@ -19,9 +21,7 @@
 # TODO:
 	* Task1:
 		* Napisat kak launch file za zaganjanje pravega robota.
-		* (optional) Spining at keypoints
 		* (optional) Higher resolution map
-		* rotate to face more accurately
 	* Task2:
 		* Black color quality
 		* white masks

@@ -26,6 +26,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
+from task1.msg import PersonInfo, GoalKeypoint
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -35,46 +36,36 @@ qos_profile = QoSProfile(
 
 def millis():
     return round(time.time() * 1000)
-def mag(vec):
-	return np.sqrt(vec.dot(vec))
+
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
 
 class Face():
 	face_id = 0
 	tresh_xy = 0.3
 	tresh_cos = math.cos(20 * 3.14/180)
 
-	def __init__(self, marker):
-		self.origin = np.array([
-			marker.points[0].x,
-			marker.points[0].y,
-			marker.points[0].z
-		])
-		self.endpoint = np.array([
-			marker.points[1].x,
-			marker.points[1].y,
-			marker.points[1].z
-		])
-		self.normal = self.endpoint - self.origin
+	def __init__(self, person_info):
+		self.origin = np.array(person_info.origin)
+		self.normal = np.array(person_info.normal)
 
+		self.quality = person_info.quality
 		self.id = Face.face_id
 		Face.face_id += 1
 
-		self.num = 1
-		self.num_tresh = 3
-		self.visited = False
-
-	def compare(self, face): #mogoce bi blo lazje primerjat ze izracunane keypointe
-		kp1 = self.origin + 0.25 * self.normal
-		kp2 = face.origin + 0.25 * face.normal
-		return mag(kp1-kp2) < 0.5
-
+	def compare(self, face): 
+		dist1 = np.linalg.norm(self.origin + self.normal * 0.25  - face.origin)
+		dist2 = np.linalg.norm(face.origin + face.normal * 0.25  - self.origin)
+		dist = min(dist1, dist2)
+		
+		cosfi = self.normal.dot(face.normal)
+		return (dist < 0.65) and (cosfi > -0.25)
 
 class detect_faces(Node):
-	last_n_faces = []
-	last_marker_time = 0
-
-	rolling_origin = np.array([0, 0, 0])
-
 	def __init__(self):
 		super().__init__('people_manager')
 
@@ -86,10 +77,9 @@ class detect_faces(Node):
 		
 		self.faces = []
 
-		marker_topic = "/people_marker"
-
-		self.marker = self.create_subscription(Marker, marker_topic, self.marker_callback, 10)
-		self.publisher = self.create_publisher(Marker, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
+		self.person_sub = self.create_subscription(PersonInfo, "/people_info", self.person_found_callback, 10)
+		self.marker_publisher = self.create_publisher(Marker, '/detected_faces', QoSReliabilityPolicy.BEST_EFFORT)
+		self.goal_publisher = self.create_publisher(GoalKeypoint, '/face_keypoints', QoSReliabilityPolicy.BEST_EFFORT)
 		
 		self.ros_occupancy_grid = None
 		self.map_np = None
@@ -105,7 +95,7 @@ class detect_faces(Node):
 			self.park_search_circle_size = 10
 			self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
 		else:	
-			self.park_search_circle_size = 6
+			self.park_search_circle_size = 7
 			self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/non_sim/costmap.pgm"), cv2.COLOR_BGR2GRAY) 
 
 		print(f"OK, simulation: {self.simulation}")
@@ -164,53 +154,56 @@ class detect_faces(Node):
 		else:
 			return [ox,oy]
 
-	def marker_callback(self, marker):
-		new_face = Face(marker)
+	def person_found_callback(self, person_info):
+		new_face = Face(person_info)
 		if not (np.isfinite(new_face.origin).all() and np.isfinite(new_face.normal).all()):
 			return
 
 		notFound = True
-		for face in self.faces:
-			if(face.compare(new_face)):  
-				face.num += 1
+		for i in range(len(self.faces)):
+			if(self.faces[i].compare(new_face)):  
 				notFound = False
-				if(not face.visited):
-					if(face.num > face.num_tresh):
-						point = Marker()
-						point.type = 2
-						point.id = face.id
-						point.header.frame_id = "/map"
-						point.header.stamp = marker.header.stamp
-						
-						point.scale.x = 0.15
-						point.scale.y = 0.15
-						point.scale.z = 0.15
+				if(new_face.quality > self.faces[i].quality):#merge and send
+					new_face.id = self.faces[i].id #Merge
+					self.faces[i] = new_face
 
-						point.color.r = 0.0
-						point.color.g = 1.0
-						point.color.b = 0.0
-						point.color.a = 1.0
+					vx, vy = self.get_valid_close_position(self.faces[i].origin[0] + (self.faces[i].normal[0] * 0.3), self.faces[i].origin[1] + (self.faces[i].normal[1] * 0.3))
 
-						vx, vy = self.get_valid_close_position(face.origin[0] + (face.normal[0] * 0.3), face.origin[1] + (face.normal[1] * 0.3))
-						point.pose.position.x = vx
-						point.pose.position.y = vy
-						point.pose.position.z = face.origin[2] + (face.normal[2] * 0.3)
+					goal = GoalKeypoint()
+					goal.face_id = self.faces[i].id
+					goal.position = [ vx, vy, 0. ]
+					goal.yaw = math.atan2(self.faces[i].origin[1]-vy, self.faces[i].origin[0]-vx)
+					self.goal_publisher.publish(goal)
+			
+					#Rviz Marker #TODO replace Task2 Sytle
+					point = Marker() #Send
+					point.type = 2
+					point.id = self.faces[i].id
+					point.header.frame_id = "/map"
+					point.header.stamp = rclpy.time.Time().to_msg()
+					
+					point.scale.x = 0.15
+					point.scale.y = 0.15
+					point.scale.z = 0.15
 
-						marker_normal = -face.normal
-						#q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))
-						q = quaternion_from_euler(0, 0, math.atan2(face.origin[1]-vy, face.origin[0]-vx))
-						point.pose.orientation.x = q[0]
-						point.pose.orientation.y = q[1]
-						point.pose.orientation.z = q[2]
-						point.pose.orientation.w = q[3]
+					point.color.r = 0.0
+					point.color.g = 1.0
+					point.color.b = 0.0
+					point.color.a = 1.0
 
-						self.publisher.publish(point)
-						face.visited = True
+					marker_normal = -self.faces[i].normal
+					q = quaternion_from_euler(0, 0, goal.yaw)
+					point.pose.orientation.x = q[0]
+					point.pose.orientation.y = q[1]
+					point.pose.orientation.z = q[2]
+					point.pose.orientation.w = q[3]
+					point.pose.position = array2point(goal.position)
+
+					self.marker_publisher.publish(point)
 				break 
 		if(notFound):
 			self.faces.append(new_face)
 	
-		self.get_logger().info(f"Got a marker {marker.points[0]} {marker.points[1]}")
 		self.get_logger().info(f"FACES: {len(self.faces)}")
 		print()
 

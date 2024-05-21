@@ -15,6 +15,7 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+from rclpy.duration import Duration
 from sensor_msgs.msg import Image, PointCloud2, LaserScan
 from sensor_msgs_py import point_cloud2 as pc2
 
@@ -26,6 +27,7 @@ import numpy as np
 
 from geometry_msgs.msg import Point
 import message_filters
+from task1.msg import PersonInfo
 
 from ultralytics import YOLO
 import sys
@@ -33,6 +35,12 @@ import sys
 #from task1.msg import FaceNormal
 # from rclpy.parameter import Parameter
 # from rcl_interfaces.msg import SetParametersResult
+
+def vec_normalize(np_vec):
+	norm = np.linalg.norm(np_vec)
+	if(norm < 0.01):
+		return np.array([0,0,0])
+	return np_vec / norm
 
 def clamp(x, minx, maxx):
 	return min(max(x, minx), maxx)
@@ -48,6 +56,14 @@ def millis():
 	return round(time.time() * 1000)	
 def nothing():
 	return
+
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
+
 
 class detect_faces(Node):
 	face_id = 0
@@ -83,13 +99,11 @@ class detect_faces(Node):
 		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub, self.laser_sub], 10, 0.05, allow_headerless=False) 
 		self.ts.registerCallback(self.rgb_laser_callback)
 
-		marker_topic = "/people_marker"
-		self.marker_pub = self.create_publisher(Marker, marker_topic, QoSReliabilityPolicy.BEST_EFFORT)
+		self.marker_pub = self.create_publisher(Marker, "/people_marker", QoSReliabilityPolicy.BEST_EFFORT)
+		self.person_pub = self.create_publisher(PersonInfo, "/people_info", QoSReliabilityPolicy.BEST_EFFORT)
 
-		marker_topic1 = "/img1"
-		self.marker_pub1 = self.create_publisher(Marker, marker_topic1, QoSReliabilityPolicy.BEST_EFFORT)
-		marker_topic2 = "/img2"
-		self.marker_pub2 = self.create_publisher(Marker, marker_topic2, QoSReliabilityPolicy.BEST_EFFORT)
+		self.marker_pub1 = self.create_publisher(Marker, "/img1", QoSReliabilityPolicy.BEST_EFFORT)
+		self.marker_pub2 = self.create_publisher(Marker, "/img2", QoSReliabilityPolicy.BEST_EFFORT)
 
 		self.tf_buffer = Buffer()
 		self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -97,7 +111,6 @@ class detect_faces(Node):
 		self.model = YOLO("yolov8n.pt")
 
 		self.faces = []
-		self.get_logger().info(f"Node has been initialized! Will publish face markers to {marker_topic}.")
 		self.t1 = millis()
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
@@ -205,6 +218,57 @@ class detect_faces(Node):
 		#print(f"x: {x}, n: {n}, fi: {fi}")
 		return np.array([ rn*math.cos(fi), rn*math.sin(fi), 0 ])
 
+	def create_point_marker(self, stamp,  point):
+		marker = Marker()
+
+		marker.header.frame_id = "/map"
+		marker.header.stamp = stamp
+
+		marker.type = 2
+
+		scale = 0.1
+		marker.scale.x = scale
+		marker.scale.y = scale
+		marker.scale.z = scale
+
+		marker.color.r = 1.0
+		marker.color.g = 1.0
+		marker.color.b = 1.0
+		marker.color.a = 1.0
+		marker.pose.position = array2point(point)
+		
+		return marker
+	def create_arrow_marker(self, stamp, m_id, origin, endpoint):
+		marker = Marker()
+		marker.header.frame_id = "/map"
+		marker.header.stamp = stamp
+		marker.lifetime = Duration(seconds=4.2).to_msg()
+		
+		marker.type = 0
+		#marker.id = detect_faces.face_id
+		marker.id = m_id
+		detect_faces.face_id+=1
+
+		# Set the scale of the marker
+		scale = 0.1
+		marker.scale.x = scale
+		marker.scale.y = scale
+		marker.scale.z = scale
+
+		# Set the color
+		marker.color.r = 1.0
+		marker.color.g = 0.0
+		marker.color.b = 0.0
+		marker.color.a = 1.0
+
+		startpoint = array2point(origin)
+		endpoint = array2point(endpoint)
+
+		marker.points.append(startpoint)
+		marker.points.append(endpoint)
+
+		return marker	
+	
 	def find_faces(self, data):
 		if(self.img_height == 0):
 			return
@@ -213,38 +277,42 @@ class detect_faces(Node):
 			return
 
 		# Gremo cez vse face, ki smo jih zaznali v zadnjem frame-u
-		for x,y,z,w in self.faces:
-			if(abs(x-y) < 15 or abs(z-w) < 10):
+		for x1,y1,x2,y2 in self.faces:
+			if(abs(x1-x2) < 15 or abs(y1-y2) < 15):
 				continue
 
-			d1 = self.get_point(data, x)
-			d2 = self.get_point(data, z)
+			r1 = self.get_point(data, x1)
+			r2 = self.get_point(data, x2)
+			r3 = self.get_point(data, (x1+x2)/2)
+
+			lin_error = np.linalg.norm(r3 - (r1+r2)/2)
 			
-			if(len(d1) == 0 or len(d2) == 0):
+			if(len(r1) == 0 or len(r2) == 0):
+				return
+
+			if(lin_error > 0.1):
 				return
 
 			#ce so robovi slike prevec dalec narazen ali pa preblizu skupaj
-			if(np.linalg.norm(d2-d1) > 0.5):
+			if(np.linalg.norm(r2-r1) > 0.5):
 				continue
-			if(np.linalg.norm(d2-d1) < 0.05):
+			if(np.linalg.norm(r2-r1) < 0.1):
 				continue
+			
 			#Ce je obraz dalec od robota, ga bomo zazanli rajsi kdaj ko bomo blizje ...
-			if(np.linalg.norm(d1) > 2.6): 
+			distance = np.linalg.norm((r1+r2)/2)
+			if(distance > 2.6): 
 				continue
 
 			p1 = PointStamped()
 			p1.header.frame_id = "/rplidar_link"
 			p1.header.stamp = self.get_clock().now().to_msg()
-			p1.point.x = float(d1[0])
-			p1.point.y = float(d1[1])
-			p1.point.z = float(d1[2])
+			p1.point = array2point(r1)
 
 			p2 = PointStamped()
 			p2.header.frame_id = "/rplidar_link"
 			p2.header.stamp = self.get_clock().now().to_msg()
-			p2.point.x = float(d2[0])
-			p2.point.y = float(d2[1])
-			p2.point.z = float(d2[2])
+			p2.point = array2point(r2)
 
 			#zdej pa te tocke transformiramo v globalne (map) koordinate
 			time_now = rclpy.time.Time()
@@ -265,44 +333,8 @@ class detect_faces(Node):
 				p2.point.z
 			]);
 
-			marker = Marker()
-
-			marker.header.frame_id = "/map"
-			marker.header.stamp = data.header.stamp
-
-			marker.type = 2
-
-			# Set the scale of the marker
-			scale = 0.1
-			marker.scale.x = scale
-			marker.scale.y = scale
-			marker.scale.z = scale
-
-			# Set the color
-			marker.color.r = 1.0
-			marker.color.g = 1.0
-			marker.color.b = 1.0
-			marker.color.a = 1.0
-
-			# Set the pose of the marker
-			marker.pose.position.x = float(d1[0])
-			marker.pose.position.y = float(d1[1])
-			marker.pose.position.z = float(d1[2])
-
-			self.marker_pub1.publish(marker)
-			
-			# Set the pose of the marker
-			marker.pose.position.x = float(d2[0])
-			marker.pose.position.y = float(d2[1])
-			marker.pose.position.z = float(d2[2])
-
-			# Set the color
-			marker.color.r = 1.0
-			marker.color.g = 0.0
-			marker.color.b = 1.0
-			marker.color.a = 1.0
-
-			self.marker_pub2.publish(marker)
+			self.marker_pub1.publish(self.create_point_marker(data.header.stamp,  d1))
+			self.marker_pub2.publish(self.create_point_marker(data.header.stamp,  d2))
 
 			origin = 0.5 * (np.array(d1).astype(float) +  np.array(d2).astype(float))
 			vector_up = np.array([0,0,1])
@@ -314,43 +346,22 @@ class detect_faces(Node):
 				return
 			vector_fwd = vector_fwd / fwd_len
 
-			# create marker
-			marker = Marker()
+			self.marker_pub.publish(self.create_arrow_marker(data.header.stamp, detect_faces.face_id, origin, origin + vector_fwd))
 
-			marker.header.frame_id = "/map"
-			marker.header.stamp = data.header.stamp
+			vec = vec_normalize(r2-r1)
+			fi = math.acos(np.array([-1,0,0]).dot(vec))
+
+			q_dist = math.exp(-distance)
+			q_lin  = math.exp(-60*lin_error)
+			q_angle = 1.0 - clamp(abs(fi)/(math.pi), 0, 1)
+			q_edges = 1.0 if (x1 > 1 and x2 < self.img_width-2) else 0.8
 			
-			marker.type = 0
-			marker.id = detect_faces.face_id
-			detect_faces.face_id+=1
+			pi = PersonInfo()
+			pi.origin = [float(origin[0]), float(origin[1]), float(origin[2])]
+			pi.normal = [float(vector_fwd[0]), float(vector_fwd[1]), float(vector_fwd[2])]
+			pi.quality = q_dist * q_lin * q_angle * q_edges
 
-			# Set the scale of the marker
-			scale = 0.1
-			marker.scale.x = scale
-			marker.scale.y = scale
-			marker.scale.z = scale
-
-			# Set the color
-			marker.color.r = 1.0
-			marker.color.g = 0.0
-			marker.color.b = 0.0
-			marker.color.a = 1.0
-
-			startpoint = Point()
-			startpoint.x = origin[0]
-			startpoint.y = origin[1]
-			startpoint.z = origin[2]
-
-			endpoint = Point()
-
-			endpoint.x = origin[0] + vector_fwd[0]
-			endpoint.y = origin[1] + vector_fwd[1]
-			endpoint.z = origin[2] + vector_fwd[2]
-
-			marker.points.append(startpoint)
-			marker.points.append(endpoint)
-			
-			self.marker_pub.publish(marker)
+			self.person_pub.publish(pi)
 
 def main():
 	print('Face detection node starting.')

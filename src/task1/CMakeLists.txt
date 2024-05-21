@@ -31,6 +31,11 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}/
 )
 
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/PersonInfo.msg"
+  "msg/GoalKeypoint.msg"
+)
+
 install(PROGRAMS
   scripts/map_goals.py
   scripts/transform_point.py
