@@ -39,6 +39,7 @@ install(PROGRAMS
   scripts/detect_people.py
   scripts/talker.py
   scripts/test.py
+  scripts/face_extractor.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_export_dependencies(${dependencies} rosidl_default_runtime)
