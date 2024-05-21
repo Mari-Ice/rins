@@ -81,7 +81,7 @@ class detect_faces(Node):
 		self.declare_parameters(
 			namespace='',
 			parameters=[
-				('device', ''),
+				('device', '')
 		])
 		
 		self.faces = []
@@ -96,12 +96,19 @@ class detect_faces(Node):
 		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
 		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
 
+		self.simulation = True
+
 		pwd = os.getcwd()
 		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
-		self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/non_sim/costmap.pgm"), cv2.COLOR_BGR2GRAY) 
-		#self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY) #For simulation
 
-		print("OK")
+		if(self.simulation):
+			self.park_search_circle_size = 10
+			self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
+		else:	
+			self.park_search_circle_size = 6
+			self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/non_sim/costmap.pgm"), cv2.COLOR_BGR2GRAY) 
+
+		print(f"OK, simulation: {self.simulation}")
 		return
 
 	def map_pixel_to_world(self, x, y, theta=0):
@@ -145,11 +152,14 @@ class detect_faces(Node):
 				pixel_locations[y][x] = [x,y]
 
 		mask1 = np.full((height, width), 0, dtype=np.uint8)
-		cv2.circle(mask1,(mx,my),6,255,-1) #TODO, odvisno od resolucije
+		cv2.circle(mask1,(mx,my),self.park_search_circle_size,255,-1)
 		mask1[self.costmap < 200] = 0
-		pts = pixel_locations[mask1==255]
+		pts = np.array(pixel_locations[mask1==255])
 		if(len(pts) > 0):
-			center = random.choice(pts)
+			#Find closest to ox,oy
+			norms = np.linalg.norm((pts - np.array([mx,my])), axis=1)
+			index_of_smallest_norm = np.argmin(norms)
+			center = pts[index_of_smallest_norm]
 			return self.map_pixel_to_world(center[0], center[1])
 		else:
 			return [ox,oy]
@@ -181,10 +191,10 @@ class detect_faces(Node):
 						point.color.b = 0.0
 						point.color.a = 1.0
 
-						vx, vy = self.get_valid_close_position(face.origin[0] + (face.normal[0] * 0.5), face.origin[1] + (face.normal[1] * 0.5))
+						vx, vy = self.get_valid_close_position(face.origin[0] + (face.normal[0] * 0.3), face.origin[1] + (face.normal[1] * 0.3))
 						point.pose.position.x = vx
 						point.pose.position.y = vy
-						point.pose.position.z = face.origin[2] + (face.normal[2] * 0.5)
+						point.pose.position.z = face.origin[2] + (face.normal[2] * 0.3)
 
 						marker_normal = -face.normal
 						#q = quaternion_from_euler(0, 0, math.atan2(marker_normal[1], marker_normal[0]))

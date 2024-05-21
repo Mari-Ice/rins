@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -24,35 +25,47 @@ from rclpy.qos import qos_profile_sensor_data
 import math
 import numpy as np
 
-STOP_AFTER_THREE = True
+STOP_AFTER_THREE = False
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 		  reliability=QoSReliabilityPolicy.RELIABLE,
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
-	   
+
+def millis():
+	return round(time.time() * 1000)	
+
 class MapGoals(Node):
 	def __init__(self):
 		super().__init__('map_goals')
 
-		self.keypoints = [
-            [-2.6000,  2.3790, 0],
-            [-1.2000,  2.3790, 0],
-            [-0.6500,  1.9290, 0],
-            [-0.0500,  2.3790, 0],
-            [-0.8500,  1.5290, 0],
-            [ 0.0000,  0.2790, 0],
-            [-1.8000,  0.4790, 0],
-            [-2.0500,  1.2790, 0],
-            [-0.7500,  1.7290, 0]
-		]
+		#Dodaj nazaj stare not za simulacijo
+
+		self.simulation = True
+		if(self.simulation):
+			self.keypoints = [
+				[-0.6600, -0.6000, 0], [-1.7100, -0.4000, 0], [-1.7600, -0.8000, 0], [-0.5100, -0.3000, 0], [-0.1600, -0.9500, 0], [-0.5100, -1.3000, 0],
+				[-0.3600, -2.0000, 0], [ 0.0400, -1.7500, 0], [ 3.3400, -1.6500, 0], [ 3.2900, -1.8000, 0], [ 3.2400, -0.9000, 0], [ 1.6400,  0.0000, 0],
+				[ 0.9400, -0.3500, 0], [ 0.8900,  1.8500, 0], [ 0.0900,  2.2500, 0], [ 0.0400,  1.9500, 0], [-1.2100,  1.3000, 0], [-0.9100,  0.9500, 0],
+				[-1.6100,  1.1500, 0], [-1.6600,  3.1500, 0], [-1.8100,  4.4500, 0], [-1.3100,  4.4500, 0], [-1.6100,  3.3500, 0], [-1.1600,  2.9500, 0],
+				[-0.7100,  3.3500, 0], [ 1.3400,  3.4000, 0], [ 2.2900,  2.6000, 0], [ 1.8900,  2.0000, 0], [ 2.4400,  1.3500, 0], [ 2.0900, -1.9000, 0]
+			]
+		else:
+			self.keypoints = [
+        	    [-2.6000,  2.3790, 0], [-1.2000,  2.3790, 0], [-0.6500,  1.9290, 0],
+        	    [-0.0500,  2.3790, 0], [-0.8500,  1.5290, 0], [ 0.0000,  0.2790, 0],
+        	    [-1.8000,  0.4790, 0], [-2.0500,  1.2790, 0], [-0.7500,  1.7290, 0]
+			]
 		self.last_keypoint = [0,0,0]
 		self.face_keypoints = []
 		self.keypoint_index = 0
 		self.forward = True
 
 		self.future = None
+		
+		self.goal_handle_inited = False
+		self.goal_handle = None
 
 		# Basic ROS stuff
 		timer_frequency = 10
@@ -60,10 +73,10 @@ class MapGoals(Node):
 		timer_period = 1/timer_frequency
 
 		# Functional variables
-		self.pending_goal = True
 		self.result_future = None
 		self.currently_navigating = False
 		self.currently_greeting = False
+		
 		self.clicked_x = None
 		self.clicked_y = None
 		self.ros_occupancy_grid = None
@@ -81,6 +94,10 @@ class MapGoals(Node):
 		self.timer = self.create_timer(timer_period, self.timer_callback)
 
 		self.client = self.create_client(Trigger, '/say_hello')
+		self.waiting_for_result = False
+
+		print(f"OK, simulation: {self.simulation}")
+		return
 
 	def get_prev_keypoint(self):
 		new_index = self.keypoint_index-1
@@ -125,7 +142,11 @@ class MapGoals(Node):
 		self.last_keypoint = new_kp
 		return new_kp
 
+
 	def timer_callback(self): 
+		if(self.waiting_for_result):
+			return
+
 		if STOP_AFTER_THREE and self.face_count >= 3:
 			self.get_logger().info(f"\n\nDone, i found and greeted with 3 faces.\n\n")
 			rclpy.shutdown()
@@ -139,7 +160,7 @@ class MapGoals(Node):
 			self.face_count += 1
 		
 		# If the robot is not currently navigating to a goal, and there is a goal pending
-		if not self.currently_navigating and self.pending_goal and not self.currently_greeting:
+		if not self.currently_navigating and not self.currently_greeting:
 			world_x, world_y, orientation = self.get_next_keypoint()
 			goal_pose = self.generate_goal_message(world_x, world_y, orientation)
 			self.go_to_pose(goal_pose)
@@ -185,7 +206,6 @@ class MapGoals(Node):
 	def go_to_pose(self, pose):
 		"""Send a `NavToPose` action request."""
 		self.currently_navigating = True
-		self.pending_goal = False
 
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
@@ -201,26 +221,29 @@ class MapGoals(Node):
 		self.send_goal_future.add_done_callback(self.goal_accepted_callback)
 
 	def goal_accepted_callback(self, future):
-		goal_handle = future.result()
+		self.goal_handle = future.result()
+		self.goal_handle_inited = True
 
-		if not goal_handle.accepted:
+		if not self.goal_handle.accepted:
 			self.get_logger().error('Goal was rejected!')
-			self.currently_greeting = False
+			self.currently_navigating = False
 			return	
 
 		self.currently_navigating = True
-		self.pending_goal = False
-		self.result_future = goal_handle.get_result_async()
+		self.result_future = self.goal_handle.get_result_async()
 		self.result_future.add_done_callback(self.get_result_callback)
 
 	def get_result_callback(self, future):
+		self.currently_navigating = False
+		status = future.result().status
+
+		if(status == GoalStatus.STATUS_CANCELED):
+			self.waiting_for_result = False
+			print("Goal cancelled.")
+			return
+
 		if(self.currently_greeting):
 			self.greet()
-
-		self.currently_navigating = False
-		# self.pending_goal = False
-		self.pending_goal = True
-		status = future.result().status
 
 		if status != GoalStatus.STATUS_SUCCEEDED:
 			self.get_logger().info(f'Goal failed with status code: {status}')
@@ -233,8 +256,6 @@ class MapGoals(Node):
 			return
 		 
 		self.get_logger().info(f'Goal reached (according to Nav2).')
-		
-		# self.pending_goal = True
 
 	def greet(self):
 		req = Trigger.Request()
@@ -258,7 +279,21 @@ class MapGoals(Node):
 		z = marker.pose.orientation.z
 		w = marker.pose.orientation.w
 		_, _, theta = euler_from_quaternion((x, y, z, w))
-		self.face_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta])
+		
+		self.face_keypoints.append([marker.pose.position.x, marker.pose.position.y, theta]) # Stack
+		if(not self.currently_greeting):
+			self.stop_following_keypoints()
+			self.get_prev_keypoint()
+			self.waiting_for_result = True
+
+	def stop_following_keypoints(self):
+		self.currently_navigating = False
+
+		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
+
+		if(self.goal_handle_inited):
+			self.nav_to_pose_client._cancel_goal_async(self.goal_handle)
 
 def main():
 	rclpy.init(args=None)

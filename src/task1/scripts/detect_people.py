@@ -63,8 +63,14 @@ class detect_faces(Node):
 
 		self.img_height = 0
 		self.img_width = 0
-		self.cam_fov_y = deg2rad(55) #TODO, odvisno od naprave.
-		self.cam_fov_x = deg2rad(55)
+		self.simulation = True
+
+		if(self.simulation):
+			self.cam_fov_y = deg2rad(90)
+			self.cam_fov_x = deg2rad(90)
+		else:	
+			self.cam_fov_y = deg2rad(55)
+			self.cam_fov_x = deg2rad(55)
 
 		self.detection_color = (0,0,255)
 		self.device = self.get_parameter('device').get_parameter_value().string_value
@@ -96,10 +102,18 @@ class detect_faces(Node):
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
 
-		cv2.createTrackbar('FovX', "Image", 55, 130, self.change_fovX)
-		cv2.createTrackbar('FovY', "Image", 55, 130, self.change_fovY)
-		cv2.createTrackbar('Height', "Image", 15, 200, self.change_height)
+		if(self.simulation):
+			cv2.createTrackbar('FovX', "Image", 90, 130, self.change_fovX)
+			cv2.createTrackbar('FovY', "Image", 90, 130, self.change_fovY)
+			cv2.createTrackbar('Height', "Image", 15, 200, self.change_height)
+		else:
+			cv2.createTrackbar('FovX', "Image", 55, 130, self.change_fovX)
+			cv2.createTrackbar('FovY', "Image", 55, 130, self.change_fovY)
+			cv2.createTrackbar('Height', "Image", 15, 200, self.change_height)
+
 		self.t_height = 0.15
+		print(f"OK, simulation: {self.simulation}")
+		return
 
 	def change_fovX(self, val):
 		self.cam_fov_x = deg2rad(max(val, 1))
@@ -131,9 +145,10 @@ class detect_faces(Node):
 			rn = np.linalg.norm(self.get_point(laser, x))
 			y = rn * math.tan(fov/2)
 			meja = int(self.img_height/2 * (1 - visina/y))
-			
-			# if(random.uniform(0,1) < 0.01): #Dodamo sum v simulciji, da lahko testiramo odpravljanje suma.. TODO odstrani potem tole
-			# 	meja = random.randrange(0,self.img_height)
+		
+			if(self.simulation):
+				if(random.uniform(0,1) < 0.01): #Dodamo sum v simulciji
+					meja = random.randrange(0,self.img_height)
 			
 			meje_arr.append(meja)
 

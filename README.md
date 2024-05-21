@@ -4,6 +4,8 @@
 		* People manager
 		* Talker
 		* Keypoint follower
+		* Find safe park positions
+		* Fixed mask artifacts
 		
 	* Task2:
 		* Parkiranje, ko si v blizini parkirnega mesta
@@ -12,12 +14,14 @@
 		* Avtomatsko raziskovanje
 		* Ocena kvalitete zaznanega obroča
 		* Štetje obročkov, premik k zelenemu obročku, da se tam lahko parkiraš 
+	* Task3:
+		* Mona Lisa training set
 # TODO:
 	* Task1:
 		* Napisat kak launch file za zaganjanje pravega robota.
-		* Find safe park positions
 		* (optional) Spining at keypoints
-		* (optional) Fix mask artifacts
+		* (optional) Higher resolution map
+		* rotate to face more accurately
 	* Task2:
 		* Black color quality
 		* white masks
