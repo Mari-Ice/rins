@@ -79,7 +79,7 @@ class detect_faces(Node):
 
 		self.img_height = 0
 		self.img_width = 0
-		self.simulation = True
+		self.simulation = False
 
 		if(self.simulation):
 			self.cam_fov_y = deg2rad(90)
@@ -96,7 +96,7 @@ class detect_faces(Node):
 
 		self.rgb_image_sub = message_filters.Subscriber(self, Image, "/oakd/rgb/preview/image_raw")
 		self.laser_sub  = message_filters.Subscriber(self, LaserScan, "/scan")
-		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub, self.laser_sub], 10, 0.05, allow_headerless=False) 
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub, self.laser_sub], 10, 0.2, allow_headerless=False) 
 		self.ts.registerCallback(self.rgb_laser_callback)
 
 		self.marker_pub = self.create_publisher(Marker, "/people_marker", QoSReliabilityPolicy.BEST_EFFORT)

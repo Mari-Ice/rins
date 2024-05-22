@@ -29,7 +29,7 @@ import numpy as np
 from geometry_msgs.msg import Twist
 from enum import Enum
 
-STOP_AFTER_THREE = False
+STOP_AFTER_THREE = True
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -88,7 +88,7 @@ class MapGoals(Node):
 
 		#Dodaj nazaj stare not za simulacijo
 
-		self.simulation = True
+		self.simulation = False
 		if(self.simulation):
 			self.keypoints = [
 				[-0.6600, -0.6000, 0], [-1.7100, -0.4000, 0], [-1.7600, -0.8000, 0], [-0.5100, -0.3000, 0], [-0.1600, -0.9500, 0], [-0.5100, -1.3000, 0],
@@ -477,7 +477,7 @@ class MapGoals(Node):
 			error = sharp_angle(self.yaw, self.face_yaw)	#TODO
 
 			#ce je error vec kot 2 sekundi < 0.1 pol smo gut
-			if(abs(error) > deg2rad(5)):
+			if(abs(error) > deg2rad(10)):
 				self.t1 = millis()
 
 			if(millis() - self.t1 > 2000):
@@ -485,11 +485,11 @@ class MapGoals(Node):
 				self.greet()
 				return
 
-			kp = 1.0
-			ki = 0.01
+			kp = 0.1
+			ki = 0.00
 
 			self.yaw_error_integral += error * ki
-			self.yaw_error_integral = clamp(self.yaw_error_integral, -math.pi, math.pi)
+			self.yaw_error_integral = clamp(self.yaw_error_integral, -0.5, 0.5)
 		
 			vel = error * kp + self.yaw_error_integral * ki
 			cmd_msg = Twist()

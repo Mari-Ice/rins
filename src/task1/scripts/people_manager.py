@@ -86,7 +86,7 @@ class detect_faces(Node):
 		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
 		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
 
-		self.simulation = True
+		self.simulation = False
 
 		pwd = os.getcwd()
 		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
