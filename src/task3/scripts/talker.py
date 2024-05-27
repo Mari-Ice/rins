@@ -10,6 +10,7 @@ from pydub import AudioSegment
 from pydub.playback import play
 from task2.srv import Color
 from std_srvs.srv import Trigger
+import speech_recognition as sr
 
 class Talker(Node):
 	
@@ -32,6 +33,10 @@ class Talker(Node):
 		self.srv_color = self.create_service(Color, 'say_color', self.say_color_callback)
 		self.srv_greet = self.create_service(Trigger, 'say_hello', self.say_hello_callback)
 		
+		self.srv_listen = self.create_service(Trigger, 'listen', self.listen_callback)
+		self.recogniser = sr.Recognizer()
+		self.source = sr.Microphone()
+
 	def say_color_callback(self, request, response):
 		try:
 			color = request.color
@@ -68,6 +73,28 @@ class Talker(Node):
 		finally:
 			return response
 
+	def listen_callback(self, request, response):
+		understood = False
+		while not understood:
+			print("Say something!")
+			audio = self.recogniser.listen(self.source)
+			# recognize speech using GoogleAPI
+			try:
+				text = self.recogniser.recognize_google(audio)
+				print("[GOOGLE]: " + text)
+				understood = True
+				response.success = True
+				response.message = text
+			except sr.UnknownValueError:
+				print("[GOOGLE]: Could not understand audio")
+				response.success = False
+				response.message = 'Error'
+			except sr.RequestError as e:
+				print("[GOOGLE ERROR]; {0}".format(e))
+				response.success = False
+				response.message = e
+		return response
+	
 def main(args=None):
 	print('Talker node starting.')
 
