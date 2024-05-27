@@ -55,12 +55,12 @@ class Talker(Node):
 			return response
 		finally:
 			response = self.listen_callback(request, response)
-			return response
+		return response
 
 	def play_sound(self, text, response):
 		try:
 			self.get_logger().info(f'Playing sound: {text}')
-			tts = gTTs(text, lang='en')
+			tts = gTTS(text, lang='en')
 			speech_file = io.BytesIO()
 			tts.write_to_fp(speech_file)
 			speech_file.seek(0)
