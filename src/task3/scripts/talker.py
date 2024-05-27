@@ -11,10 +11,11 @@ from pydub.playback import play
 from task2.srv import Color
 from std_srvs.srv import Trigger
 import speech_recognition as sr
-from gtts import gTTs
+from gtts import gTTS
 import io
 from enum import Enum
 from task3.msg import Park
+from rclpy.qos import QoSReliabilityPolicy
 
 class Talker(Node):
 	
@@ -31,7 +32,7 @@ class Talker(Node):
 		self.goodbye = 'Thank you very much. Goodbye!'
 
 		self.srv_listen = self.create_service(Trigger, 'listen', self.listen_callback)
-		self.pub_park = self.create_publisher(Park, '/park_near_obj')
+		self.pub_park = self.create_publisher(Park, '/park_near_obj', QoSReliabilityPolicy.BEST_EFFORT)
 		self.recogniser = sr.Recognizer()
 
 	def say_color_callback(self, request, response):
