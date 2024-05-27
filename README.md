@@ -43,6 +43,7 @@ pyaudio # additionally pubaudio19-dev
 ultralytics
 SpeechRecognition
 gtts
+sklearn
 
 	* ffmpeg
 	* tf_transformations

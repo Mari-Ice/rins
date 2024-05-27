@@ -36,6 +36,7 @@ class Talker(Node):
 		self.recogniser = sr.Recognizer()
 
 	def say_color_callback(self, request, response):
+		self.get_logger().info('Playing color!')
 		try:
 			color = self.colors[request.color]
 			response.color = color

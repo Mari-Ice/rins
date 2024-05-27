@@ -42,6 +42,17 @@ def generate_launch_description():
             executable='park.py',
             name='visually_assisted_parking'
         ),
+        Node(
+            package='task3',
+            executable='detect_people.py',
+            name='detect_people'
+        ),
+        Node(
+            package='task3',
+            executable='face_extractor.py',
+            name='face_extractor'
+        ),
+
     ])
 
     

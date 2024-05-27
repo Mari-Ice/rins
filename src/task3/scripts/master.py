@@ -29,8 +29,8 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task2.msg import RingInfo, Waypoint
-from task2.srv import Color
+from task3.msg import RingInfo, Waypoint, AnomalyInfo
+from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
@@ -103,14 +103,22 @@ class MasterNode(Node):
 		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
 		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
 		self.priority_keypoint_pub = self.create_publisher(Waypoint, '/priority_keypoint', QoSReliabilityPolicy.BEST_EFFORT)
-		
+
+		self.people_marker_sub = self.create_subscription(Marker, "/people_marker", self.people_callback, qos_profile_sensor_data)
+		self.anomaly_info_sub = self.create_subscription(AnomalyInfo, "/anomaly_info", self.anomaly_callback, qos_profile_sensor_data)
+
 		self.color_talker_srv = self.create_client(Color, '/say_color')
+		self.greet_srv = self.create_client(Trigger, '/say_hello')
 
 		self.exploration_active = False
 		self.green_ring_position = [0,0]
 		self.green_ring_found = False
 		self.ring_count = 0	
 		self.rings = []
+		# added people management (monas can count as people? what is better) TODO
+		self.people_count = 0
+		self.people = []
+
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
 		self.t1 = millis()
@@ -173,6 +181,14 @@ class MasterNode(Node):
 		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
 		return
 
+	def people_callback(self, marker):
+		# TODO add person marker to list and determine if it is monalisa
+		pass
+
+	def anomaly_callback(self, anomaly):
+		# TODO: add monalisa to list and by quality determine if it is true monalisa
+		pass	
+	
 	def change_state(self, state):
 		old_state = self.state
 		self.state = state

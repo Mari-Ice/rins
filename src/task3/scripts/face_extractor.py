@@ -295,6 +295,7 @@ class face_extractor(Node):
 			self.anomaly_pub.publish(msg)
 		cv2.imshow("ErrorMona", 1 - err) 
 
+		
 def main():
 	rclpy.init(args=None)
 	node = face_extractor()
