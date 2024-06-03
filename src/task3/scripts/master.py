@@ -34,6 +34,9 @@ from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
+from statemachine import State
+from statemachine import StateMachine
+
 MIN_DETECTED_RINGS = 4
 
 qos_profile = QoSProfile(
@@ -103,6 +106,8 @@ def millis():
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
+  
+		self.sm = MasterStateMachine(self)
 
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
 		self.time = rclpy.time.Time() #T0
@@ -136,8 +141,6 @@ class MasterNode(Node):
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
 		self.t1 = millis()
-		self.state = MasterState.INIT
-		self.change_state(MasterState.INIT)
 
 		self.ros_occupancy_grid = None
 		self.map_np = None
@@ -192,7 +195,7 @@ class MasterNode(Node):
 			print(f'Goal failed with status code: {status}')
 		else:
 			print(f'Goal reached (according to Nav2).')
-		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
+		self.sm.setup_camera_for_parking()
 		return
 
 	def people_callback(self, marker):
@@ -202,25 +205,6 @@ class MasterNode(Node):
 	def anomaly_callback(self, anomaly):
 		# TODO: add monalisa to list and by quality determine if it is true monalisa
 		pass	
-	
-	def change_state(self, state):
-		old_state = self.state
-		self.state = state
-		print(f"state -> {MasterState(state).name}")
-
-		self.on_state_change(old_state, state)
-		return
-	
-	def on_state_change(self, old_state, new_state):
-		m_time = millis()
-		if(old_state == MasterState.MOVING_TO_RING_FOR_PARKING):
-			self.setup_camera_for_parking()
-			self.t1 = m_time
-		if(new_state == MasterState.PARKING):
-			self.start_parking()
-		if(new_state == MasterState.EXPLORING):
-			self.enable_exploration()
-		return
 
 	def map_pixel_to_world(self, x, y, theta=0):
 		assert not self.map_data["resolution"] is None
@@ -276,35 +260,28 @@ class MasterNode(Node):
 		self.send_ring_markers()
 		
 		m_time = millis()
-		if(self.state == MasterState.INIT):
+		if(self.sm.init.is_active):
 			if((m_time - self.t1) > 3000): #Wait for n_s na zacetku,da se zadeve inicializirajo...
-				self.setup_camera_for_ring_detection()
-				self.change_state(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
-				self.t1 = m_time
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
+				self.sm.setup_camera_for_exploration()
+		elif(self.sm.camera_setup_for_exploration.is_active):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo n_s
 			if((m_time - self.t1) > 4000):
-				self.change_state(MasterState.EXPLORING)
-				self.t1 = m_time
-		elif(self.state == MasterState.EXPLORING):
+				self.sm.explore()
+		elif(self.sm.explore.is_active):
 			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
 				if((m_time - self.t1) > 2000):
-					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
-					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
-					self.go_to_pose(fixed_x, fixed_y) 
-					self.change_state(MasterState.MOVING_TO_RING_FOR_PARKING)
+					self.sm.move_to_ring_for_parking()
 				else:
 					self.disable_exploration()
 			else:
 				self.t1 = m_time
 
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
+		elif(self.sm.camera_setup_for_parking.is_active):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo 3s
 			if((m_time - self.t1) > 3000):
-				self.change_state(MasterState.PARKING)
-				self.t1 = m_time
+				self.sm.park()
 		return
 
 	def found_new_ring(self, ring_info):
@@ -447,6 +424,77 @@ class MasterNode(Node):
 		else:
 			self.merge_ring_with_target(min_index, ring_info)
 		return
+
+class MasterStateMachine(StateMachine):
+	init = State(MasterState.INIT, initial=True)
+	camera_setup_for_exploration = State(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
+	exploring = State(MasterState.EXPLORING)
+	moving_to_person = State(MasterState.MOVING_TO_PERSON)
+	talking_to_person = State(MasterState.TALKING_TO_PERSON)
+	validating_ring = State(MasterState.VALIDATING_RING)
+	checking_info = State(MasterState.CHECKING_INFO)
+	moving_to_ring_for_parking = State(MasterState.MOVING_TO_RING_FOR_PARKING)
+	camera_setup_for_parking = State(MasterState.CAMERA_SETUP_FOR_PARKING)
+	parking = State(MasterState.PARKING)
+	finding_cylinder = State(MasterState.FINDING_CYLINDER)
+	moving_to_cylinder = State(MasterState.MOVING_TO_CYLINDER)
+	camera_setup_for_qr = State(MasterState.CAMERA_SETUP_FOR_QR)
+	reading_qr = State(MasterState.READING_QR)
+	displaying_photo_from_qr = State(MasterState.DISPLAYING_PHOTO_FROM_QR)
+	camera_setup_for_paintings = State(MasterState.CAMERA_SETUP_FOR_PAINTINGS)
+	searching_for_paintings = State(MasterState.SEARCHING_FOR_PAINTINGS)
+	moving_to_painting = State(MasterState.MOVING_TO_PAINTING)
+	detecting_anomalies = State(MasterState.DETECTING_ANOMALIES)
+	moving_to_genuine_painting = State(MasterState.MOVING_TO_GENUINE_PAINTING)
+	done = State(MasterState.DONE, final=True)
+	
+	setup_camera_for_exploration = init.to(camera_setup_for_exploration)
+	explore = camera_setup_for_exploration.to(exploring) | talking_to_person.to(exploring) | validating_ring.to(exploring) | checking_info.to(exploring) | reading_qr.to(searching_for_paintings) | detecting_anomalies.to(searching_for_paintings)
+	
+	move_to_person = exploring.to(moving_to_person)
+	talk_to_person = moving_to_person.to(talking_to_person)
+	
+	validate_ring = exploring.to(validating_ring)
+	
+	check_info = talking_to_person.to(checking_info) | validating_ring.to(checking_info)
+	
+	move_to_ring_for_parking = checking_info.to(moving_to_ring_for_parking)
+	setup_camera_for_parking = moving_to_ring_for_parking.to(camera_setup_for_parking)
+	park = camera_setup_for_parking.to(parking)
+	find_cylinder = parking.to(finding_cylinder)
+	move_to_cylinder = finding_cylinder.to(moving_to_cylinder)
+	setup_camera_for_qr = moving_to_cylinder.to(camera_setup_for_qr)
+	read_qr = camera_setup_for_qr.to(reading_qr)
+	
+	move_to_painting = searching_for_paintings.to(moving_to_painting)
+	detect_anomalies = moving_to_painting.to(detecting_anomalies)
+	
+	go_to_genuine_painting = detecting_anomalies.to(moving_to_genuine_painting)
+	stop = moving_to_genuine_painting.to(done)
+	
+	def __init__(self, master_node : MasterNode):
+		super(MasterStateMachine, self).__init__()
+		self.node = master_node
+  
+	def on_transition(self):
+		self.node.t1 = millis()
+		
+	def on_setup_camera_for_exploration(self):
+		self.node.setup_camera_for_ring_detection()
+
+	def on_exit_moving_to_ring_for_parking(self):
+		self.node.setup_camera_for_parking()
+  
+	def on_enter_parking(self):
+		self.node.start_parking()
+  
+	def on_explore(self):
+		self.node.enable_exploration()
+  
+	def on_move_to_ring_for_parking(self):
+		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.green_ring_position[0], self.node.green_ring_position[1])
+		print(f"original: {self.node.green_ring_position[0]}, {self.node.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
+		self.node.go_to_pose(fixed_x, fixed_y)
 
 def main():
 	rclpy.init(args=None)
