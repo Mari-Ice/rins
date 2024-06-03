@@ -18,6 +18,7 @@
 		* Štetje obročkov, premik k zelenemu obročku, da se tam lahko parkiraš 
 	* Task3:
 		* Mona Lisa training set
+		* Speech recognition
 # TODO:
 	* Task1:
 		* Napisat kak launch file za zaganjanje pravega robota.
@@ -28,7 +29,7 @@
 	* Task3:
 		* Surface defect detection PCA (Mona Lisa surface)
 		* Cylinder detection
-		* Speech recognition
+  		* QR code
 
 # Poganjanje na robotu
 	* NUJNO NA TURTLEBOT WIFIJU
@@ -36,3 +37,14 @@
 	* ros2 launch turtlebot4_navigation localization.launch.py map:=src/dis_tutorial3/maps/non_sim/map.yaml
 	* rviz2 -> set initial pose (Pose estimate)
 	* ros2 launch dis_tutorial3 nav2.launch.py
+
+# REQUIREMENTS python packages
+pydub
+pyaudio # additionally pubaudio19-dev
+ultralytics
+SpeechRecognition
+gtts
+scikit-learn
+
+	* ffmpeg
+	* tf_transformations
