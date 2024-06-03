@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
+import os
 import random
 import time
 import math
 import rclpy
 import cv2
 import numpy as np
-import tf2_geometry_msgs as tfg
 import message_filters
 from enum import Enum
 from rclpy.node import Node
@@ -28,7 +28,7 @@ from geometry_msgs.msg import Quaternion, PoseStamped, PoseWithCovarianceStamped
 from geometry_msgs.msg import Twist
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
-from task2.msg import CylinderInfo
+from task3.msg import CylinderInfo
 
 amcl_pose_qos = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -36,55 +36,32 @@ amcl_pose_qos = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-
 #	Kamera naj bo v looking_for_cylinders polozaju.
-#	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
 
-def lin_map(x, from_min, from_max, to_min, to_max):
-	normalized_x = (x - from_min) / (from_max - from_min)
-	mapped_value = normalized_x * (to_max - to_min) + to_min
-	return mapped_value
-def clamp(x, min_x, max_x):
-	return min(max(x,min_x),max_x)
-		
-def separate(depth, dep=0):
-	gut = np.sort(depth[depth!=0])
-	if(len(gut) < 10):
-		return []
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
 
-	if(dep > 7): #max depth
-		mask = np.zeros_like(depth, dtype=np.uint8)
-		mask[depth>0] = 255
-		return [mask]
+def create_point_marker(point, header):
+	marker = Marker()
+	marker.header = header
 
-	max_diff = 0
-	max_diff_index = 0
-	for i in range(1,len(gut)):
-		b = gut[i]
-		a = gut[i-1]	
-		diff = b-a
-		if(diff > max_diff):
-			max_diff = diff
-			max_diff_index = i
+	marker.type = 2
 
-	m = gut[max_diff_index]
-	m_min = (gut[0] + gut[1] + gut[2])/3
-	m_max = (gut[-1] + gut[-2] + gut[-3])/3
-	m_diff = m_max - m_min
+	marker.scale.x = 0.1
+	marker.scale.y = 0.1
+	marker.scale.z = 0.1
 
-	thresh = 0.025
-	if(max_diff < thresh):
-		mask = np.zeros_like(depth, dtype=np.uint8)
-		mask[depth>0] = 255
-		return [mask]
-
-	g1 = depth.copy()
-	g1[depth<m] = 0
-
-	g2 = depth.copy()
-	g2[depth>=m] = 0
-
-	return separate(g1, dep+1) + separate(g2, dep+1)
+	marker.color.r = 1.0
+	marker.color.g = 1.0
+	marker.color.b = 1.0
+	marker.color.a = 1.0
+	marker.pose.position = array2point(point)
+	
+	return marker
 
 class CylinderDetection(Node):
 	def __init__(self):
@@ -96,91 +73,96 @@ class CylinderDetection(Node):
 				('device', ''),
 		])
 
+		pwd = os.getcwd()
+		self.gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
+
 		self.bridge = CvBridge()
+		self.rgb_image_sub = message_filters.Subscriber(self, Image, "/oakd/rgb/preview/image_raw")
+		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/oakd/rgb/preview/depth/points")
+		self.depth_sub = message_filters.Subscriber(self, Image,	 "/top_camera/rgb/preview/depth")
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 20, 0.1, allow_headerless=False) 
+		self.ts.registerCallback(self.sensors_callback)
 
-		# For listening and loading the TF
-		self.tf_buffer = Buffer()
-		self.tf_listener = TransformListener(self.tf_buffer, self)
-		
-		self.cylinder_sub = message_filters.Subscriber(self, PointCloud2, "/cylinder")
+		self.marker_pub = self.create_publisher(Marker, "/cylinder_marker", QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.ts = message_filters.ApproximateTimeSynchronizer( [self.cylinder_sub], 10, 0.3, allow_headerless=False) 
-		self.ts.registerCallback(self.rgb_pc_callback)
+		print("Init")
+		return
 
-		#msg publisher
-		self.cylinder_info_pub = self.create_publisher(CylinderInfo, "/cylinder_info", QoSReliabilityPolicy.BEST_EFFORT)
+	def sensors_callback(self, rgb_data, pc, depth_data):
+		# Prep data formats
+		img 	= self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
+		height	= pc.height
+		width	= pc.width
+		xyz = pc2.read_points_numpy(pc, field_names= ("x", "y", "z"))
+		xyz = xyz.reshape((height,width,3))
+		depth_raw = self.bridge.imgmsg_to_cv2(depth_raw, "32FC1")
+		depth_raw[depth_raw==np.inf] = 0
+		hsv_image = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+		cylinder_mask = np.zeros((height, width), dtype=np.uint8)
+		cylinder_mask[hsv_image[:,:,1] > 180] = 255				    #Color mask
+		cylinder_mask[(xyz[:,:,2] < -0.2) | (xyz[:,:,2] > 0.4)] = 0 #Height mask
+		#TODO: popravi za crno barvo
 
-		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
+		contours_tupled, hierarchy = cv2.findContours(image=cylinder_mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
+		for c in contours_tupled:
+			c = cv2.convexHull(c)
+			x1, y1, width, height = cv2.boundingRect(c)	
+			if(width < 10 or height < 10): #TODO: Nastavi prave meje...
+				continue
+			x2 = x1 + width
+			y2 = y1 + height	
 
-		# cv2.namedWindow("Depth0", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth1", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth2", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth3", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth4", cv2.WINDOW_NORMAL)
+			per_cylinder_depth = depth_raw[y1:y2,x1:x2]
+			line_gradient = np.mean(per_cylinder_depth, axis=0)
+			line_gradient -= np.min(line_gradient)
 
-		cv2.waitKey(1)
-		cv2.moveWindow('Image',  1   ,1)
-		cv2.moveWindow('Mask',   415 ,1)
-		cv2.moveWindow('Depth',   830 ,1)
+			print(f"Line gradient: {line_gradient}")
 
-		cv2.moveWindow('Depth1',   1 ,500)
-		cv2.moveWindow('Depth2',   415 ,500)
-		cv2.moveWindow('Depth3',   830 ,500)
-		cv2.moveWindow('Depth4',   1245 ,500)
+			# Okej, to more bit zdej bit vedno neki zlo podobnega za cilindre.
+			# TODO: preveri kaj dobis, fitaj mogoce na nek znan gradient...
+			
+			# Recimo da zgornje velja. Tedaj je treba najdit polozaj, zamaknjenost, barvo, kvaliteto
+			# Podobobno kot pri ring_detection...
+			# Pa poslat marker v rviz...
 
-		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
-		# cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
-		
-		cv2.setTrackbarPos("A", "Image", 100)
-		cv2.setTrackbarPos("B", "Image", 200)
+			# Vec opcij.
+			#	1. Povprecje (vseh) vidnih tock
+			#	2. Najdes najblizjo tocko in v pristejes radij cilindra. (Mogoce bolj ziher idk)
 
+			# Probamo prvo opcijo 1:
+			per_cylinder_pc = xyz[y1:y2,x1:x2]
+			center = np.mean(per_cylinder_pc, axis=0)
 
-		self.start_time = time.time()
+			cheader = Header()
+			cheader.stamp = rgb_data.header.stamp
+			cheader.frame_id = "/oakd"
+			cmarker = create_point_marker(center, cheader)
+			self.marker_pub.publish(cmarker)
 
-	def nothing(self, data):
-		pass
+			# Ekstra podatki ki jih racunamo
+			per_cylinder_img = img[y1:y2,x1:x2]
+			avg_color = np.mean(per_cylinder_img, axis=0)	
+			color_dist_sq = (per_cylinder_img[:] - avg_color)**2
+			avg_color_dist = np.mean(color_dist_sq)
+			
+			per_cylinder_img_hsv = hsv_image[y1:y2,x1:x2]
+			avg_hsv = np.mean(per_cylinder_img_hsv, axis=0)	
+			color_index = int(((avg_hsv[0] + 45)%256) / 85) #Mogoce niso prave vresnoti tuke
 
-	def rgb_pc_callback(self, pc):
+			q_color	= math.exp(-0.0004*avg_color_dist)
+			q_size = 1
+			q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(center))**2)
 
-		if((time.time() - self.start_time) < 3):
-			return
-
-		cv2.waitKey(1)		
-		xyzrgb = pc2.read_points_numpy(pc, field_names= ("y", "z", "x", "rgb"))
-		xyz = xyzrgb[:, 0:3]
-		rgb = xyzrgb[:, 3]
-
-		rgb = rgb.astype(int)
-		f = lambda x: [(x >> 16) & 0x0000ff, (x >> 8)  & 0x0000ff, x & 0x0000ff]
-		rgb = np.array(f(rgb))
-
-		print("xyzrgb")
-		print(xyzrgb)
-		print("xyz")
-		print(xyz)
-		print("rgb")
-		print(rgb)
-
-		hsv = rgb_to_hsv(rgb)
-		avg_saturation = np.mean(hsv[:, 1], axis=0)
-		avg_color = np.mean(rgb, axis=0)
-
-		color_dist_sq = (rgb - avg_color)**2
-		avg_color_dist = np.mean(color_dist_sq)
-
-		q_color_dist = math.exp(-0.0004*avg_color_dist)
-		q_color_saturation = avg_saturation
-		q = q_color_dist * q_color_saturation
-
-		print(f"q_color_dist: {q_color_dist:.2f}, q_color_saturation: {q_color_saturation:.2f}, q: {q:.2f}")
-
-
+			cinfo = CylinderInfo()
+			cinfo.color_index = color_index
+			cinfo.color = avg_color.tolist()
+			cinfo.position = center.tolist()
+			cinfo.quality = q_color * q_size * q_distance
+			
+		return
 
 def main():
-	print("OK")
 	rclpy.init(args=None)
 	node = CylinderDetection()
 	
