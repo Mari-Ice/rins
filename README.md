@@ -29,6 +29,7 @@
 	* Task3:
 		* Surface defect detection PCA (Mona Lisa surface)
 		* Cylinder detection
+  		* QR code
 
 # Poganjanje na robotu
 	* NUJNO NA TURTLEBOT WIFIJU
