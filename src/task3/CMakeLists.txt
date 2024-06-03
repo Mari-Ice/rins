@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/cylinder_detection.py
   scripts/detect_people.py
   scripts/face_extractor.py
+  scripts/qr_codes.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
