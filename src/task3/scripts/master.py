@@ -49,11 +49,25 @@ qos_profile = QoSProfile(
 class MasterState(Enum):
 	INIT = 0
 	CAMERA_SETUP_FOR_EXPLORATION = 1
-	EXPLORATION = 2
-	MOVING_TO_GREEN = 3
-	CAMERA_SETUP_FOR_PARKING = 4
-	PARKING = 5
-	DONE = 6
+	EXPLORING = 2
+	MOVING_TO_PERSON = 3
+	TALKING_TO_PERSON = 4
+	VALIDATING_RING = 5
+	CHECKING_INFO = 6
+	MOVING_TO_RING_FOR_PARKING = 7
+	CAMERA_SETUP_FOR_PARKING = 8
+	PARKING = 9
+	FINDING_CYLINDER = 10
+	MOVING_TO_CYLINDER = 11
+	CAMERA_SETUP_FOR_QR = 12
+	READING_QR = 13
+	DISPLAYING_PHOTO_FROM_QR = 14
+	CAMERA_SETUP_FOR_PAINTINGS = 15
+	SEARCHING_FOR_PAINTINGS = 16
+	MOVING_TO_PAINTING = 17
+	DETECTING_ANOMALIES = 18
+	MOVING_TO_GENUINE_PAINTING = 19
+	DONE = 20
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker = Marker()
@@ -199,12 +213,12 @@ class MasterNode(Node):
 	
 	def on_state_change(self, old_state, new_state):
 		m_time = millis()
-		if(old_state == MasterState.MOVING_TO_GREEN):
+		if(old_state == MasterState.MOVING_TO_RING_FOR_PARKING):
 			self.setup_camera_for_parking()
 			self.t1 = m_time
 		if(new_state == MasterState.PARKING):
 			self.start_parking()
-		if(new_state == MasterState.EXPLORATION):
+		if(new_state == MasterState.EXPLORING):
 			self.enable_exploration()
 		return
 
@@ -271,15 +285,15 @@ class MasterNode(Node):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo n_s
 			if((m_time - self.t1) > 4000):
-				self.change_state(MasterState.EXPLORATION)
+				self.change_state(MasterState.EXPLORING)
 				self.t1 = m_time
-		elif(self.state == MasterState.EXPLORATION):
+		elif(self.state == MasterState.EXPLORING):
 			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
 				if((m_time - self.t1) > 2000):
 					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
 					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
 					self.go_to_pose(fixed_x, fixed_y) 
-					self.change_state(MasterState.MOVING_TO_GREEN)
+					self.change_state(MasterState.MOVING_TO_RING_FOR_PARKING)
 				else:
 					self.disable_exploration()
 			else:
@@ -421,7 +435,7 @@ class MasterNode(Node):
 		return
 		
 	def ring_callback(self, ring_info):
-		if(self.state != MasterState.EXPLORATION):
+		if(self.state != MasterState.EXPLORING):
 			return
 
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
