@@ -60,17 +60,18 @@ class MasterState(Enum):
 	MOVING_TO_RING_FOR_PARKING = 7
 	CAMERA_SETUP_FOR_PARKING = 8
 	PARKING = 9
-	FINDING_CYLINDER = 10
-	MOVING_TO_CYLINDER = 11
-	CAMERA_SETUP_FOR_QR = 12
-	READING_QR = 13
-	DISPLAYING_PHOTO_FROM_QR = 14
-	CAMERA_SETUP_FOR_PAINTINGS = 15
-	SEARCHING_FOR_PAINTINGS = 16
-	MOVING_TO_PAINTING = 17
-	DETECTING_ANOMALIES = 18
-	MOVING_TO_GENUINE_PAINTING = 19
-	DONE = 20
+	CAMERA_SETUP_FOR_CYLINDER = 10
+	FINDING_CYLINDER = 11
+	MOVING_TO_CYLINDER = 12
+	CAMERA_SETUP_FOR_QR = 13
+	READING_QR = 14
+	DISPLAYING_PHOTO_FROM_QR = 15
+	CAMERA_SETUP_FOR_PAINTINGS = 16
+	SEARCHING_FOR_PAINTINGS = 17
+	MOVING_TO_PAINTING = 18
+	DETECTING_ANOMALIES = 19
+	MOVING_TO_GENUINE_PAINTING = 20
+	DONE = 21
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker = Marker()
@@ -130,8 +131,13 @@ class MasterNode(Node):
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
 
 		self.exploration_active = False
-		self.green_ring_position = [0,0]
-		self.green_ring_found = False
+		self.parking_ring_position = [0,0]
+		self.parking_ring_found = False
+		self.cylinder_position = [0,0]
+		self.cylinder_found = False
+		self.genuine_mona_lisa_position = [0,0]
+		self.genuine_mona_lisa_found = False
+		self.qr_code_read = False
 		self.ring_count = 0	
 		self.rings = []
 		# added people management (monas can count as people? what is better) TODO
@@ -195,7 +201,14 @@ class MasterNode(Node):
 			print(f'Goal failed with status code: {status}')
 		else:
 			print(f'Goal reached (according to Nav2).')
-		self.sm.setup_camera_for_parking()
+		if(self.sm.moving_to_ring_for_parking.is_active):
+			self.sm.camera_setup_for_parking()
+		elif(self.sm.moving_to_cylinder.is_active):
+			self.sm.camera_setup_for_qr()
+		elif(self.sm.moving_to_genuine_painting.is_active):
+			self.sm.stop()
+		else:
+			raise ValueError("Unknown state")
 		return
 
 	def people_callback(self, marker):
@@ -267,22 +280,48 @@ class MasterNode(Node):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo n_s
 			if((m_time - self.t1) > 4000):
-				self.sm.explore()
+				if self.qr_code_read == False:
+					self.sm.explore()
+				else:
+					self.sm.explore_paintings()
 		elif(self.sm.explore.is_active):
-			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
+			if(self.found_all_people()):
 				if((m_time - self.t1) > 2000):
 					self.sm.move_to_ring_for_parking()
 				else:
 					self.disable_exploration()
-			else:
-				self.t1 = m_time
+			# else: 
+			# 	self.t1 = m_time
 
 		elif(self.sm.camera_setup_for_parking.is_active):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo 3s
 			if((m_time - self.t1) > 3000):
 				self.sm.park()
+    
+		elif(self.sm.camera_setup_for_qr.is_active):
+			if((m_time - self.t1) > 3000):
+				self.sm.read_qr()
+    
+		elif(self.sm.searching_for_paintings.is_active):
+			if(self.found_all_mona_lisas()):
+				if((m_time - self.t1) > 2000):
+					self.sm.move_to_genuine_painting()
+				else:
+					self.disable_exploration()
+			# else: 
+			# 	self.t1 = m_time
+    
+
 		return
+
+	def found_all_people(self):
+		# TODO: implement (either "all people" or enough data to find parking spot)
+		pass
+
+	def found_all_mona_lisas(self):
+		# TODO: implement (either "all mona lisas" or enough data to find genuine painting)
+		pass
 
 	def found_new_ring(self, ring_info):
 		self.ring_count += 1
@@ -292,11 +331,11 @@ class MasterNode(Node):
 		self.say_color(ring_info.color_index)
 
 		if(ring_info.color_index == 1): #nasli smo zelen ring
-			if(self.green_ring_found): #okej dva zelena wtf
+			if(self.parking_ring_found): #okej dva zelena wtf
 				pass #TODO
 			else:
-				self.green_ring_found = True
-				self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
+				self.parking_ring_found = True
+				self.parking_ring_position = [ring_info.position[0], ring_info.position[1]]
 		return
 
 	def send_ring_markers(self):
@@ -332,9 +371,34 @@ class MasterNode(Node):
 		self.arm_pos_pub.publish(msg)
 		return
 
+	def setup_camera_for_qr(self):
+		msg = String()
+		msg.data = "look_for_qr"
+		self.arm_pos_pub.publish(msg)
+		pass
+
 	def start_parking(self):
 		req = Trigger.Request()
 		self.park_srv.call_async(req)
+		return
+
+	# TODO: call this when parking finishes
+	def parking_ended(self):
+		self.sm.find_cylinder()
+		return
+
+	def find_cylinder(self):
+		# TODO: implement (rotate in place, run cylinder detection, once correct cylinder is found call self.sm.move_to_cylinder())
+		pass
+
+	def start_qr_reading(self):
+		# TODO: start reading QR code
+		pass
+	
+ 	# TODO: call this when qr reading finishes
+	def qr_reading_ended(self):
+		self.qr_code_read = True
+		self.sm.setup_camera_for_exploration()
 		return
 
 	def enable_exploration(self):
@@ -405,14 +469,15 @@ class MasterNode(Node):
 			self.found_new_ring(ring)
 		if(ring.q > result[0].q):
 			result = [ring, ring]
+			# TODO: ne iščemo zelenega ringa ampak tistega ki nam ga povejo
 			if(ring.color_index == 1 and ring.q > self.ring_quality_threshold): #Zelen, izboljsas... TODO
-				self.green_ring_position = ring.position
+				self.parking_ring_position = ring.position
 				
 		self.rings[target_index] = result
 		return
 		
 	def ring_callback(self, ring_info):
-		if(self.state != MasterState.EXPLORING):
+		if(not self.sm.exploring.is_active):
 			return
 
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
@@ -429,47 +494,50 @@ class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)
 	camera_setup_for_exploration = State(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
 	exploring = State(MasterState.EXPLORING)
-	moving_to_person = State(MasterState.MOVING_TO_PERSON)
-	talking_to_person = State(MasterState.TALKING_TO_PERSON)
-	validating_ring = State(MasterState.VALIDATING_RING)
-	checking_info = State(MasterState.CHECKING_INFO)
+	# moving_to_person = State(MasterState.MOVING_TO_PERSON)
+	# talking_to_person = State(MasterState.TALKING_TO_PERSON)
+	# validating_ring = State(MasterState.VALIDATING_RING)
+	# checking_info = State(MasterState.CHECKING_INFO)
 	moving_to_ring_for_parking = State(MasterState.MOVING_TO_RING_FOR_PARKING)
 	camera_setup_for_parking = State(MasterState.CAMERA_SETUP_FOR_PARKING)
 	parking = State(MasterState.PARKING)
+	camera_setup_for_cylinder = State(MasterState.CAMERA_SETUP_FOR_CYLINDER)
 	finding_cylinder = State(MasterState.FINDING_CYLINDER)
 	moving_to_cylinder = State(MasterState.MOVING_TO_CYLINDER)
 	camera_setup_for_qr = State(MasterState.CAMERA_SETUP_FOR_QR)
 	reading_qr = State(MasterState.READING_QR)
-	displaying_photo_from_qr = State(MasterState.DISPLAYING_PHOTO_FROM_QR)
+	# displaying_photo_from_qr = State(MasterState.DISPLAYING_PHOTO_FROM_QR)
 	camera_setup_for_paintings = State(MasterState.CAMERA_SETUP_FOR_PAINTINGS)
 	searching_for_paintings = State(MasterState.SEARCHING_FOR_PAINTINGS)
-	moving_to_painting = State(MasterState.MOVING_TO_PAINTING)
-	detecting_anomalies = State(MasterState.DETECTING_ANOMALIES)
+	# moving_to_painting = State(MasterState.MOVING_TO_PAINTING)
+	# detecting_anomalies = State(MasterState.DETECTING_ANOMALIES)
 	moving_to_genuine_painting = State(MasterState.MOVING_TO_GENUINE_PAINTING)
 	done = State(MasterState.DONE, final=True)
 	
-	setup_camera_for_exploration = init.to(camera_setup_for_exploration)
-	explore = camera_setup_for_exploration.to(exploring) | talking_to_person.to(exploring) | validating_ring.to(exploring) | checking_info.to(exploring) | reading_qr.to(searching_for_paintings) | detecting_anomalies.to(searching_for_paintings)
+	setup_camera_for_exploration = init.to(camera_setup_for_exploration) | reading_qr.to(camera_setup_for_exploration)
+	explore = camera_setup_for_exploration.to(exploring) # | talking_to_person.to(exploring) | validating_ring.to(exploring) | checking_info.to(exploring)
+	explore_paintings = camera_setup_for_exploration.to(searching_for_paintings) # | detecting_anomalies.to(searching_for_paintings)
 	
-	move_to_person = exploring.to(moving_to_person)
-	talk_to_person = moving_to_person.to(talking_to_person)
+	# move_to_person = exploring.to(moving_to_person)
+	# talk_to_person = moving_to_person.to(talking_to_person)
 	
-	validate_ring = exploring.to(validating_ring)
+	# validate_ring = exploring.to(validating_ring)
 	
-	check_info = talking_to_person.to(checking_info) | validating_ring.to(checking_info)
+	# check_info = talking_to_person.to(checking_info) | validating_ring.to(checking_info)
 	
-	move_to_ring_for_parking = checking_info.to(moving_to_ring_for_parking)
+	move_to_ring_for_parking = explore.to(moving_to_ring_for_parking) # checking_info.to(moving_to_ring_for_parking)
 	setup_camera_for_parking = moving_to_ring_for_parking.to(camera_setup_for_parking)
 	park = camera_setup_for_parking.to(parking)
-	find_cylinder = parking.to(finding_cylinder)
+	setup_camera_for_cylinder = parking.to(camera_setup_for_cylinder)
+	find_cylinder = camera_setup_for_cylinder.to(finding_cylinder)
 	move_to_cylinder = finding_cylinder.to(moving_to_cylinder)
 	setup_camera_for_qr = moving_to_cylinder.to(camera_setup_for_qr)
 	read_qr = camera_setup_for_qr.to(reading_qr)
 	
-	move_to_painting = searching_for_paintings.to(moving_to_painting)
-	detect_anomalies = moving_to_painting.to(detecting_anomalies)
+	# move_to_painting = searching_for_paintings.to(moving_to_painting)
+	# detect_anomalies = moving_to_painting.to(detecting_anomalies)
 	
-	go_to_genuine_painting = detecting_anomalies.to(moving_to_genuine_painting)
+	move_to_genuine_painting = searching_for_paintings.to(moving_to_genuine_painting) # detecting_anomalies.to(moving_to_genuine_painting)
 	stop = moving_to_genuine_painting.to(done)
 	
 	def __init__(self, master_node : MasterNode):
@@ -482,18 +550,46 @@ class MasterStateMachine(StateMachine):
 	def on_setup_camera_for_exploration(self):
 		self.node.setup_camera_for_ring_detection()
 
-	def on_exit_moving_to_ring_for_parking(self):
+	def on_setup_camera_for_parking(self):
 		self.node.setup_camera_for_parking()
+  
+	def on_setup_camera_for_qr(self):
+		self.node.setup_camera_for_qr()
   
 	def on_enter_parking(self):
 		self.node.start_parking()
   
+	def on_find_cylinder(self):
+		self.node.find_cylinder()
+  
+	def on_move_to_cylinder(self):
+		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.cylinder_position[0], self.node.cylinder_position[1])
+		print(f"original: {self.node.cylinder_position[0]}, {self.node.cylinder_position[1]} -new-> {fixed_x}, {fixed_y}")
+		self.node.go_to_pose(fixed_x, fixed_y)
+  
+	def on_read_qr(self):
+		self.node.start_qr_reading()
+  
 	def on_explore(self):
 		self.node.enable_exploration()
   
+	def on_explore_paintings(self):
+		self.node.enable_exploration()
+  
+	def on_exit_exploring(self):
+		self.node.disable_exploration()
+  
+	def on_exit_searching_for_paintings(self):
+		self.node.disable_exploration()
+  
 	def on_move_to_ring_for_parking(self):
-		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.green_ring_position[0], self.node.green_ring_position[1])
-		print(f"original: {self.node.green_ring_position[0]}, {self.node.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
+		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.parking_ring_position[0], self.node.parking_ring_position[1])
+		print(f"original: {self.node.parking_ring_position[0]}, {self.node.parking_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
+		self.node.go_to_pose(fixed_x, fixed_y)
+  
+	def on_move_to_genuine_painting(self):
+		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.genuine_mona_lisa_position[0], self.node.genuine_mona_lisa_position[1])
+		print(f"original: {self.node.genuine_mona_lisa_position[0]}, {self.node.genuine_mona_lisa_position[1]} -new-> {fixed_x}, {fixed_y}")
 		self.node.go_to_pose(fixed_x, fixed_y)
 
 def main():
