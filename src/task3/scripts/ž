@@ -100,7 +100,7 @@ class CylinderDetection(Node):
 		depth_raw[depth_raw==np.inf] = 0
 		hsv_image = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-		# print(width, height, depth_raw.shape)
+		print(width, height, depth_raw.shape)
 
 		cylinder_mask = np.zeros((height, width), dtype=np.uint8)
 		cylinder_mask[hsv_image[:,:,1] > 100] = 255					#Color mask
@@ -125,31 +125,20 @@ class CylinderDetection(Node):
 			y2 -= 5
 
 			per_cylinder_depth = depth_raw[y1:y2,x1:x2]
+
 			pcs = per_cylinder_depth.copy()
 			pcs -= np.min(pcs)
 			pcs /= np.max(pcs)
 
 			#cv2.imshow(f"Cylinder", pcs)
 			#continue
-			line_gradient = np.mean(per_cylinder_depth, axis=0)
-			min_index = np.argmin(line_gradient)
-
-			if(min_index < 10):
-				continue
-
-			line_gradient -= line_gradient[min_index]
+			line_gradient = np.mean(per_cylinder_depth, axis=1)
+			line_gradient -= np.min(line_gradient)
+			#print(f"Line gradient: {line_gradient}")
 		
-			der = line_gradient[1:min_index+1] - line_gradient[0:min_index]
-			k = (der[-1] - der[0]) / len(der)
-			n = der[0]
+			for j in range(1,len(line_gradient)//2):
+				print(line_gradient[j] - line_gradient[j-1])	
 
-			x = np.arange(0,min_index)
-			x = k*x + n
-
-			#print(np.sum(abs(der - x)))
-			error = np.sum(abs(der - x))
-			if(error > 1.0):
-				continue
 
 			# Probamo prvo opcijo 1:
 			per_cylinder_pc = xyz[y1:y2,x1:x2]
@@ -165,8 +154,7 @@ class CylinderDetection(Node):
 			self.marker_pub.publish(cmarker)
 
 			# Ekstra podatki ki jih racunamo
-			per_cylinder_img = img[y1:y2,x1:x2]
-			cv2.imshow(f"Cylinder", per_cylinder_img)
+			# per_cylinder_img = img[y1:y2,x1:x2]
 
 			# avg_color = np.mean(per_cylinder_img, axis=0)	
 			# color_dist_sq = (per_cylinder_img[:] - avg_color)**2

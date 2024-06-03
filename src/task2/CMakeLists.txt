@@ -34,9 +34,6 @@ link_directories(${PCL_LIBRARY_DIRS})
 
 set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions message_filters)
 
-add_executable(cylinder_segmentation src/cylinder_segmentation.cpp)
-ament_target_dependencies(cylinder_segmentation ${dependencies})
-
 set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions rosidl_default_generators message_filters)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -46,15 +43,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Waypoint.msg"
 )
 
-target_link_libraries(cylinder_segmentation
-  ${Boost_SYSTEM_LIBRARY}
-  ${PCL_LIBRARIES}
-)
 
-install(TARGETS
-  cylinder_segmentation
-  DESTINATION lib/${PROJECT_NAME}
-)
 
 install(PROGRAMS
   scripts/autonomous_explorer.py

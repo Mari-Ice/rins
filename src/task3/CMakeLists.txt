@@ -37,7 +37,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RingInfo.msg"
   "msg/CylinderInfo.msg"
   "msg/Waypoint.msg"
-  "msg/AnomalyInfo.msg"
+  #"msg/AnomalyInfo.msg"
   "msg/PeopleInfo.msg"
 )
 
