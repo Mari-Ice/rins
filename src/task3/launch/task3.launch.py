@@ -52,7 +52,11 @@ def generate_launch_description():
             executable='face_extractor.py',
             name='face_extractor'
         ),
-
+        Node(
+            package='task3',
+            executable='cylinder_detection.py',
+            name='cylinder_detection'
+        ),
     ])
 
     
