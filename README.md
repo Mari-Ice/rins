@@ -48,3 +48,6 @@ scikit-learn
 
 	* ffmpeg
 	* tf_transformations
+# Diagram
+
+![state diagram](diagram.png)
