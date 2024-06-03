@@ -18,29 +18,44 @@ def generate_launch_description():
             name='arm_mover',
         ),
 		Node(
-            package='task2',
+            package='task3',
             executable='master.py',
             name='master',
         ),
         Node(
-            package='task2',
-            executable='color_talker.py',
-            name='color_talker',        
+            package='task3',
+            executable='talker.py',
+            name='talker',        
         ),
         Node(
-            package='task2',
+            package='task3',
             executable='ring_detection.py',
             name='ring_detection',
         ),
         Node(
-            package='task2',
+            package='task3',
             executable='autonomous_explorer.py',
             name='autonomous_explorer'
         ),
         Node(
-            package='task2',
+            package='task3',
             executable='park.py',
             name='visually_assisted_parking'
+        ),
+        Node(
+            package='task1',
+            executable='detect_people.py',
+            name='detect_people'
+        ),
+        Node(
+            package='task3',
+            executable='face_extractor.py',
+            name='face_extractor'
+        ),
+        Node(
+            package='task3',
+            executable='cylinder_detection.py',
+            name='cylinder_detection'
         ),
     ])
 

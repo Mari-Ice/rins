@@ -37,6 +37,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RingInfo.msg"
   "msg/CylinderInfo.msg"
   "msg/Waypoint.msg"
+  "msg/AnomalyInfo.msg"
+  "msg/PeopleInfo.msg"
 )
 
 install(PROGRAMS
@@ -46,6 +48,7 @@ install(PROGRAMS
   scripts/master.py
   scripts/park.py
   scripts/cylinder_detection.py
+  scripts/face_extractor.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
