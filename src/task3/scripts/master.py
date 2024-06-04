@@ -361,7 +361,8 @@ class MasterNode(Node):
 		self.talk_to_person()
 	
 	def talk_to_person(self):
-		# TODO
+		# TODO: implement
+		print("Talking to person")
 		pass
 
 	def send_ring_markers(self):
@@ -442,6 +443,7 @@ class MasterNode(Node):
 		return
 
 	def say_color(self, color_index):
+		print(f"Say color: {color_index}")
 		req = Color.Request()
 		req.color = color_index
 		self.color_talker_srv.call_async(req)

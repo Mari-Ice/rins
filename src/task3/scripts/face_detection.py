@@ -210,10 +210,10 @@ class face_detection(Node):
 			finfo.yaw_relative = fi
 			finfo.quality = q_dist * q_angle * q_edges
 			
-			finfo.isMona = False
+			finfo.is_mona = False
 			for c in contours_mona:
 				if(face_in_bbox(face, c)):
-					finfo.isMona = True
+					finfo.is_mona = True
 					break
 
 			self.data_pub.publish(finfo)
