@@ -16,6 +16,7 @@ import io
 from enum import Enum
 from task3.msg import Park
 from rclpy.qos import QoSReliabilityPolicy
+import time
 
 class Talker(Node):
 
@@ -29,7 +30,6 @@ class Talker(Node):
 		self.colors = ['red', 'green', 'blue', 'black']
 		self.greet = 'Hello!'
 		self.ask = 'Do you know where the Mona Lisa painting is?'
-		self.clue = 'Do you know where I should look for it?'
 		self.goodbye = 'Thank you very much. Goodbye!'
 
 		self.srv_listen = self.create_service(Trigger, 'listen', self.listen_callback)
@@ -51,6 +51,7 @@ class Talker(Node):
 	def say_hello_callback(self, request, response):
 		try:
 			response = self.play_sound(self.greet, response)
+			response = self.play_sound(self.ask, response)
 		except Exception as e:
 			response.success = False
 			response.message = str(e)
@@ -80,11 +81,14 @@ class Talker(Node):
 	def listen_callback(self, request, response):
 		understood = False
 		with sr.Microphone() as source:
+	
+			print("Say something!")
+			audio = self.recogniser.listen(source)
+			print('processing audio...')
+			# recognize speech using GoogleAPI
 			while not understood:
-				print("Say something!")
-				audio = self.recogniser.listen(source)
-				# recognize speech using GoogleAPI
 				try:
+					print("Recognizing...")
 					text = self.recogniser.recognize_google(audio)
 					print("[GOOGLE]: " + text)
 					understood = True
@@ -97,33 +101,30 @@ class Talker(Node):
 					print("[GOOGLE ERROR]; {0}".format(e))
 					response.success = False
 					response.message = e
+				
 		return response
 	
 	def process_text(self, text, response):
 		# the function for text processing
+		print('processing text')
 		colors = []
 		object = ''
 		clue = False
-		if 'No' in text or 'don\'t' in text:
-			pass
-		else:
-			for color in self.colors:
-				if color in text:
-					colors.append(color)
-			if 'ring' in text:
-				object = 'ring'
-			elif 'cylinder' in text:
-				object = 'cylinder'
-			else:
-				response.success = False
-				return 'Could not understand.'
-			clue = True
-		self.play_sound(self.goodbye)
+		
+		for color in self.colors:
+			if color in text:
+				colors.append(color)
+		if len(colors) == 0:	
+			response.success = False
+			return 'Could not understand.'
+		self.play_sound(f'I will look for it around {" and ".join(colors)} ring.', response)
+		self.play_sound(self.goodbye, response)
 		if clue:
 			park = Park()
 			park.color = color
 			park.obj = object
 			self.pub_park.publish(park)
+			
 		response.success = True
 		return 'OK'
 	def say_custom_msg_callback(self, message, response):
