@@ -35,7 +35,7 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo
+from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo, Park
 from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
@@ -138,6 +138,9 @@ class MasterNode(Node):
 		self.go_to_person = False
 		self.talk_future = None
 
+		self.potential_parking_spots = None
+		self.park_sub = self.create_subscription(Park, '/park_near_obj', self.parking_info_callback, QoSReliabilityPolicy.BEST_EFFORT)
+
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
 
@@ -157,6 +160,8 @@ class MasterNode(Node):
 
 		self.last_person_seen = None
 
+		self.ring_position = {}
+
 		self.exploration_active = False
 		self.parking_ring_position = [0,0]
 		self.parking_ring_found = False
@@ -174,7 +179,7 @@ class MasterNode(Node):
 
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
-		self.person_quality_threshold = 0.3 # TODO: determine threshold
+		self.person_quality_threshold = 0.1 # TODO: determine threshold
 		self.t1 = millis()
 
 		self.ros_occupancy_grid = None
@@ -234,9 +239,9 @@ class MasterNode(Node):
 		else:
 			print(f'Goal reached (according to Nav2).')
 		if(self.sm.moving_to_ring_for_parking.is_active):
-			self.sm.camera_setup_for_parking()
+			self.sm.setup_camera_for_parking()
 		elif(self.sm.moving_to_cylinder.is_active):
-			self.sm.camera_setup_for_qr()
+			self.sm.setup_camera_for_qr()
 		elif(self.sm.moving_to_genuine_painting.is_active):
 			self.sm.stop()
 		elif(self.sm.moving_to_person.is_active):
@@ -301,7 +306,7 @@ class MasterNode(Node):
 
 	def on_update(self):
 		self.send_ring_markers()
-		
+
 		m_time = millis()
 		if(self.sm.init.is_active):
 			if((m_time - self.t1) > 3000): #Wait for n_s na zacetku,da se zadeve inicializirajo...
@@ -352,7 +357,17 @@ class MasterNode(Node):
 
 	def found_all_people(self):
 		# TODO: implement (either "all people" or enough data to find parking spot)
-		pass
+		
+		print(f"Potential Parking Spots: {self.potential_parking_spots}")
+		print(f"Ring Positions: {self.ring_position}")
+
+		# enough data:
+		if self.potential_parking_spots is not None and len(self.potential_parking_spots) == 1:
+			if list(self.potential_parking_spots)[0] in self.ring_position.keys():
+				self.parking_ring_position = self.ring_position[list(self.potential_parking_spots)[0]]
+				self.parking_ring_found = True
+				return True
+		return False
 
 	def found_all_mona_lisas(self):
 		# TODO: implement (either "all mona lisas" or enough data to find genuine painting)
@@ -365,12 +380,8 @@ class MasterNode(Node):
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
 		self.say_color(ring_info.color_index)
 
-		if(ring_info.color_index == 1): #nasli smo zelen ring
-			if(self.parking_ring_found): #okej dva zelena wtf
-				pass #TODO
-			else:
-				self.parking_ring_found = True
-				self.parking_ring_position = [ring_info.position[0], ring_info.position[1]]
+		self.ring_position[color_names[ring_info.color_index]] = [ring_info.position[0], ring_info.position[1]]
+
 		return
 	
 	def found_new_person(self, face_info):
@@ -588,6 +599,14 @@ class MasterNode(Node):
 		else:
 			self.merge_person_with_target(min_index, face_info)
 		return
+	
+	def parking_info_callback(self, park_info):
+		print(f"Park info: {park_info.colors}")
+		if(self.potential_parking_spots is None):
+			self.potential_parking_spots = set(park_info.colors)
+		else:
+			self.potential_parking_spots = self.potential_parking_spots.intersection(set(park_info.colors))
+
 
 class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)

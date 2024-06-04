@@ -81,12 +81,11 @@ class Talker(Node):
 	def listen_callback(self, request, response):
 		understood = False
 		with sr.Microphone() as source:
-	
-			print("Say something!")
-			audio = self.recogniser.listen(source)
-			print('processing audio...')
 			# recognize speech using GoogleAPI
 			while not understood:
+				print("Say something!")
+				audio = self.recogniser.listen(source)
+				print('processing audio...')
 				try:
 					print("Recognizing...")
 					text = self.recogniser.recognize_google(audio)
@@ -108,7 +107,6 @@ class Talker(Node):
 		# the function for text processing
 		print('processing text')
 		colors = []
-		clue = False
 		
 		for color in self.colors:
 			if color in text:
@@ -118,10 +116,10 @@ class Talker(Node):
 			return 'Could not understand.'
 		self.play_sound(f'I will look for it around {" and ".join(colors)} ring.', response)
 		self.play_sound(self.goodbye, response)
-		if clue:
-			park = Park()
-			park.color = colors
-			self.pub_park.publish(park)
+		
+		park = Park()
+		park.colors = colors
+		self.pub_park.publish(park)
 			
 		response.success = True
 		return 'OK'
