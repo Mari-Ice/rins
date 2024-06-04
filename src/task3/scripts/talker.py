@@ -8,7 +8,7 @@ from rclpy.exceptions import ParameterNotDeclaredException
 
 from pydub import AudioSegment
 from pydub.playback import play
-from task2.srv import Color
+from task3.srv import Color, CustomMsg
 from std_srvs.srv import Trigger
 import speech_recognition as sr
 from gtts import gTTS
@@ -18,12 +18,13 @@ from task3.msg import Park
 from rclpy.qos import QoSReliabilityPolicy
 
 class Talker(Node):
-	
+
 	def __init__(self):
 		super().__init__('talker')
 	   
 		self.srv_color = self.create_service(Color, 'say_color', self.say_color_callback)
 		self.srv_greet = self.create_service(Trigger, 'say_hello', self.say_hello_callback)
+		self.srv_say_custom = self.create_service(CustomMsg, 'say_custom_msg', self.say_custom_msg_callback)
 		
 		self.colors = ['red', 'green', 'blue', 'black']
 		self.greet = 'Hello!'
@@ -125,7 +126,14 @@ class Talker(Node):
 			self.pub_park.publish(park)
 		response.success = True
 		return 'OK'
-
+	def say_custom_msg_callback(self, message, response):
+		try:
+			response = self.play_sound(message.msg, response)
+		except Exception as e:
+			response.success = False
+			response.message = str(e)
+		finally:
+			return response
 	
 
 def main(args=None):

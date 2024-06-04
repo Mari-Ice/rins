@@ -34,6 +34,7 @@ set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Color.srv"
+  "srv/CustomMsg.srv"
   "msg/RingInfo.msg"
   "msg/CylinderInfo.msg"
   "msg/Waypoint.msg"
