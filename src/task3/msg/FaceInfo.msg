@@ -5,3 +5,4 @@ float64[] position_relative
 float64[] normal_relative
 float64 yaw_relative
 float64 quality
+bool isMona
