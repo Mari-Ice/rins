@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import random
 import time
 import math
 import rclpy
@@ -26,7 +27,7 @@ import numpy as np
 
 import message_filters
 from ultralytics import YOLO
-from task3.msg import FaceInfo
+from task3.msg import ParkingSpotInfo
 
 def clamp(x, minx, maxx):
 	return min(max(x, minx), maxx)
@@ -72,6 +73,25 @@ def create_point_marker(position, header):
 	
 	return marker
 
+def fit_circle(points): 
+	if(len(points) < 10):
+		return None
+
+	mat_A = np.zeros((points.shape[0], 3), dtype=np.float64)
+	mat_A[:,0:2] = points
+	mat_A[:,2] = 1
+
+	vec_B = mat_A[:,0]**2 + mat_A[:,1]**2
+	
+	#Resimo linearen sistem	 A*[a,b,c]^T=b
+	a,b,c = np.linalg.lstsq(mat_A, vec_B, rcond=None)[0]
+
+	cx = a/2
+	cy = b/2
+	r = math.sqrt(4*c+a*a+b*b)/2
+
+	return [cx,cy,r]
+
 class face_detection(Node):
 	def __init__(self):
 		super().__init__('face_detection')
@@ -90,10 +110,9 @@ class face_detection(Node):
 		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub, self.point_cloud_sub], 20, 0.03, allow_headerless=False) 
 		self.ts.registerCallback(self.sensors_callback)
 
-		self.marker_pub = self.create_publisher(Marker, "/face_marker", QoSReliabilityPolicy.BEST_EFFORT)
-		self.data_pub   = self.create_publisher(FaceInfo, "/face_info", QoSReliabilityPolicy.BEST_EFFORT)
+		self.marker_pub = self.create_publisher(Marker, "/parking_spot_marker", QoSReliabilityPolicy.BEST_EFFORT)
+		self.data_pub   = self.create_publisher(ParkingSpotInfo, "/parking_spot_info", QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.model = YOLO("yolov8n.pt")
 		self.received_any_data = False
 		print("Init")
 		return
@@ -110,14 +129,7 @@ class face_detection(Node):
 			print(e)
 			return
 
-		faces = []
-		res = self.model.predict(img, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
-		for x in res:
-			for box in x.boxes.xyxy:
-				box = [ int(min(box[0],box[2])), int(min(box[1], box[3])), int(max(box[0],box[2])), int(max(box[1], box[3]))]
-				if((box[2]-box[0]) < 10 or (box[3]-box[1]) < 10): #Slika obraza mora bit vsaj 10x10 pixlov.
-					continue
-				faces.append(box)
+		img_display = img.copy()
 
 		height	   = pc_data.height
 		width	   = pc_data.width
@@ -125,70 +137,56 @@ class face_detection(Node):
 		pc_xyz = pc_xyz.reshape((height,width,3))
 
 		height_mask = np.zeros((height, width), dtype=np.uint8)
-		height_mask[(pc_xyz[:,:,2] > -0.145) & (pc_xyz[:,:,2] < 0.088)] = 255
+		height_mask[pc_xyz[:,:,2] < -0.24] = 255
 
-		marker_header = Header()
-		marker_header.frame_id = "/oakd_link"
-		marker_header.stamp = rgb_data.header.stamp
+		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9,9))
+		height_mask = cv2.erode(height_mask, kernel)
 
-		for i, face in enumerate(faces):
-			mask = np.zeros((height, width), dtype=np.uint8)
-			mask = cv2.rectangle(mask, (face[0], face[1]), (face[2], face[3]), 255, -1) 
-			mask[height_mask != 255] = 0
+		img[height_mask != 255] = (255,255,255)
+		img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+		_,img = cv2.threshold(img,60,255,cv2.THRESH_BINARY)
 
-			contours, hierarchy = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
-			if(len(contours) != 1):
-				continue
+		edge_points = pc_xyz[:,:,0:2][img != 255]
+		if(len(edge_points) < 15):
+			return
 		
-			x,y,w,h = cv2.boundingRect(contours[0])
-			p1 = pc_xyz[y,x]
-			p2 = pc_xyz[y,x+w-1]
-			p3 = pc_xyz[y+h-1,x]
-			p4 = pc_xyz[y+h-1,x+w-1]
+		avg_pt = np.mean(edge_points, axis=0)
+		diff = (edge_points - avg_pt)
+		dist_sq = diff[:,0]**2 + diff[:,1]**2
+		# print(min(dist_sq), max(dist_sq), np.mean(dist_sq))
 
-			v1 = vec_normalize(p2 - p1)
-			v2 = vec_normalize(p3 - p1)
+		edge_points = edge_points[dist_sq < 0.2]
+		if(len(edge_points) < 10):
+			return
 
-			#p_center = np.mean(pc_xyz[mask != 0], axis=0)
-			p_center2 = 0.5*(p2 + p3)
-			p_center3 = 0.5*(p1 + p4)
-			p_center = p_center2
+		#Zdej pa fitas krog gor.
+		cx,cy,r = fit_circle(edge_points)
 
-			if(np.linalg.norm(p_center2 - p_center) > 0.1 or np.linalg.norm(p_center3 - p_center) > 0.1):
-				continue
-		
-			normal = np.cross(v1,v2)
-			mag = np.linalg.norm(normal)
-			if(abs(mag) < 0.0001):
-				continue
-			normal /= mag
+		if(r < 0.15 or r > 0.30):
+			return
 
-			img = cv2.rectangle(img, (face[0], face[1]), (face[2], face[3]), (0,0,255), 2)
+		q_radius = circle_quality = math.pow(math.e, -0.1*(abs(0.24 - r)))
+		q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(np.array([cx,cy])))**2)
 
-			marker = create_point_marker(p_center, marker_header)
-			marker.id = 10 * i + 0
-			marker.lifetime = Duration(seconds=.2).to_msg()
-			self.marker_pub.publish(marker)
+		#Send marker
+		header = Header()
+		header.stamp = rgb_data.header.stamp
+		header.frame_id = "/oakd_link"
+		marker = create_point_marker([cx,cy,-0.24], header)
+		marker.id = random.randint(1,100000)
+		marker.lifetime = Duration(seconds=.1).to_msg()
+		self.marker_pub.publish(marker)
 
-			#FaceInfo
-			fi = math.atan2(p_center[1], p_center[0])
-			q_dist = math.exp(-np.linalg.norm(p_center))
-			q_angle = 1.0 - clamp(abs(fi)/(math.pi), 0, 1)
-			q_edges = 1.0 if (face[0] > 1 and face[2] < width-2) else 0.8
-			
-			finfo = FaceInfo()
-			finfo.img_bounds_xyxy = face
-			finfo.width  = (face[2] - face[0])
-			finfo.height = (face[3] - face[1])
-			finfo.position_relative = p_center.tolist()
-			finfo.normal_relative = normal.tolist()
-			finfo.yaw_relative = fi
-			finfo.quality = q_dist * q_angle * q_edges
-			
-			self.data_pub.publish(finfo)
+		fi = math.atan2(cy, cx)
+		msg = ParkingSpotInfo()
+		msg.position_relative = [cx,cy,-0.24]
+		msg.yaw_relative = fi
+		msg.quality = q_radius * q_distance
+		self.data_pub.publish(msg)
 
-		#cv2.imshow("Image", img)
-		#key = cv2.waitKey(1)
+		# cv2.imshow("HeightMask", height_mask)
+		# cv2.imshow("Img", img)
+		cv2.waitKey(1)
 		return	
 
 def main():
