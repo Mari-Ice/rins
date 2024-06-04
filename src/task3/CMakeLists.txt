@@ -40,6 +40,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Waypoint.msg"
   "msg/FaceInfo.msg"
   "msg/ParkingSpotInfo.msg"
+  "msg/AnomalyInfo.msg"
 )
 
 install(PROGRAMS

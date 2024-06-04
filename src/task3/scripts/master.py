@@ -16,6 +16,12 @@ from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import ColorRGBA
 from std_msgs.msg import String
 
+from geometry_msgs.msg import PointStamped, Point
+import tf2_geometry_msgs as tfg
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
@@ -29,7 +35,7 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task3.msg import RingInfo, Waypoint, AnomalyInfo
+from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo
 from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
@@ -98,11 +104,18 @@ def argmin(arr, normal_fcn, params):
 			c_min_index = i
 	return [c_min, c_min_index]
 
-def ring_dist_normal_fcn(ring_elt, new_ring):
-	return np.linalg.norm(np.array(ring_elt[0].position) - np.array(new_ring.position))
+def dist_normal_fcn(elt, new):
+	return np.linalg.norm(np.array(elt[0].position) - np.array(new.position))
 
 def millis():
 	return round(time.time() * 1000)	
+
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
 
 class MasterNode(Node):
 	def __init__(self):
@@ -112,6 +125,9 @@ class MasterNode(Node):
 
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
 		self.time = rclpy.time.Time() #T0
+
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 		
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
@@ -124,8 +140,8 @@ class MasterNode(Node):
 		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
 		self.priority_keypoint_pub = self.create_publisher(Waypoint, '/priority_keypoint', QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.people_marker_sub = self.create_subscription(Marker, "/people_marker", self.people_callback, qos_profile_sensor_data)
 		self.anomaly_info_sub = self.create_subscription(AnomalyInfo, "/anomaly_info", self.anomaly_callback, qos_profile_sensor_data)
+		self.face_info_sub = self.create_subscription(FaceInfo, "/face_info", self.people_callback, qos_profile_sensor_data)
 
 		self.color_talker_srv = self.create_client(Color, '/say_color')
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
@@ -140,12 +156,14 @@ class MasterNode(Node):
 		self.qr_code_read = False
 		self.ring_count = 0	
 		self.rings = []
-		# added people management (monas can count as people? what is better) TODO
 		self.people_count = 0
 		self.people = []
+		self.monas_count = 0
+		self.monas = []
 
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
+		self.person_quality_threshold = 0.3 # TODO: determine threshold
 		self.t1 = millis()
 
 		self.ros_occupancy_grid = None
@@ -174,7 +192,10 @@ class MasterNode(Node):
 		return goal_pose
 
 	def go_to_pose(self, x,y): #nav2
-		pose = self.create_nav2_goal_msg(x,y)
+		fixed_x, fixed_y = self.get_valid_close_position(x, y)
+		print(f"original: {x}, {y} -new-> {fixed_x}, {fixed_y}")
+		
+		pose = self.create_nav2_goal_msg(fixed_x,fixed_y)
 
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
@@ -210,10 +231,6 @@ class MasterNode(Node):
 		else:
 			raise ValueError("Unknown state")
 		return
-
-	def people_callback(self, marker):
-		# TODO add person marker to list and determine if it is monalisa
-		pass
 
 	def anomaly_callback(self, anomaly):
 		# TODO: add monalisa to list and by quality determine if it is true monalisa
@@ -284,7 +301,7 @@ class MasterNode(Node):
 					self.sm.explore()
 				else:
 					self.sm.explore_paintings()
-		elif(self.sm.explore.is_active):
+		elif(self.sm.exploring.is_active):
 			if(self.found_all_people()):
 				if((m_time - self.t1) > 2000):
 					self.sm.move_to_ring_for_parking()
@@ -337,6 +354,15 @@ class MasterNode(Node):
 				self.parking_ring_found = True
 				self.parking_ring_position = [ring_info.position[0], ring_info.position[1]]
 		return
+	
+	def found_new_person(self, face_info):
+		self.people_count += 1
+		print(f"Found new person.")
+		self.talk_to_person()
+	
+	def talk_to_person(self):
+		# TODO
+		pass
 
 	def send_ring_markers(self):
 		ma = MarkerArray()
@@ -345,7 +371,7 @@ class MasterNode(Node):
 			marker = None
 			
 			if(r[0].q > self.ring_quality_threshold):
-				marker = create_marker_point(r[0].position, r[0].color)
+				marker = create_marker_point(r[0].position)
 				marker.id = i
 			else:
 				marker = create_marker_point(r[0].position, [0.8,0.8,0.8])
@@ -483,12 +509,80 @@ class MasterNode(Node):
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
 		#ring_info.color_index = (ring_info.color_index + 1) % 4
 
-		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
+		ring_info.position = self.relative_to_world_pos(ring_info.position_relative)
+
+		min_dist, min_index = argmin(self.rings, dist_normal_fcn, ring_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
 		else:
 			self.merge_ring_with_target(min_index, ring_info)
 		return
+	
+	def cleanup_potential_people(self): 
+		for j, fi in enumerate(self.people):
+			if(fi[0].quality < self.person_quality_threshold):
+				continue
+
+			for i,ri in enumerate(self.people):
+				if(ri[0].quality >= self.person_quality_threshold):
+					continue
+				
+				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
+				if(dist < 1.0):
+					self.people.remove(ri)
+		return
+	
+	def add_new_person(self, face_info):
+		self.people.append([face_info, face_info])
+		self.cleanup_potential_people()
+		if(face_info.quality > self.person_quality_threshold):
+			self.found_new_person(face_info)
+		else: #Pojdi od blizje pogledat. (Priority Keypoint)
+			rx, ry = self.get_valid_close_position(face_info.position[0], face_info.position[1])
+			if(rx == face_info.position[0] and ry == face_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
+				return
+
+			wp = Waypoint()
+			wp.x = rx
+			wp.y = ry
+			wp.yaw = face_info.yaw_relative
+			
+		return
+
+	def merge_person_with_target(self, target_index, face_info):
+		result = [self.people[target_index][0], face_info]
+		if(face_info.quality > self.person_quality_threshold and result[0].quality <= self.person_quality_threshold):
+			self.found_new_person(face_info)
+		if(face_info.quality > result[0].quality):
+			result = [face_info, face_info]
+				
+		self.people[target_index] = result
+		return
+	
+	def people_callback(self, face_info : FaceInfo):
+		# TODO: only go to non-mona-lisas during exploration and only go to mona-lisas during painting search
+		face_info.position = self.relative_to_world_pos(face_info.position_relative)
+
+		min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
+		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
+			self.add_new_person(face_info)	
+		else:
+			self.merge_person_with_target(min_index, face_info)
+		return
+	
+	def relative_to_world_pos(self, position_relative):
+		p1 = PointStamped()
+		p1.header.frame_id = "/rplidar_link"
+		p1.header.stamp = self.get_clock().now().to_msg()
+		p1.point = array2point(position_relative)
+
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=10.0)
+		trans = self.tf_buffer.lookup_transform("map", "rplidar_link", time_now, timeout)	
+
+		p1 = tfg.do_transform_point(p1, trans)
+
+		return [p1.point.x, p1.point.y, p1.point.z]
 
 class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)
@@ -507,7 +601,7 @@ class MasterStateMachine(StateMachine):
 	camera_setup_for_qr = State(MasterState.CAMERA_SETUP_FOR_QR)
 	reading_qr = State(MasterState.READING_QR)
 	# displaying_photo_from_qr = State(MasterState.DISPLAYING_PHOTO_FROM_QR)
-	camera_setup_for_paintings = State(MasterState.CAMERA_SETUP_FOR_PAINTINGS)
+	# camera_setup_for_paintings = State(MasterState.CAMERA_SETUP_FOR_PAINTINGS)
 	searching_for_paintings = State(MasterState.SEARCHING_FOR_PAINTINGS)
 	# moving_to_painting = State(MasterState.MOVING_TO_PAINTING)
 	# detecting_anomalies = State(MasterState.DETECTING_ANOMALIES)
@@ -525,7 +619,7 @@ class MasterStateMachine(StateMachine):
 	
 	# check_info = talking_to_person.to(checking_info) | validating_ring.to(checking_info)
 	
-	move_to_ring_for_parking = explore.to(moving_to_ring_for_parking) # checking_info.to(moving_to_ring_for_parking)
+	move_to_ring_for_parking = exploring.to(moving_to_ring_for_parking) # checking_info.to(moving_to_ring_for_parking)
 	setup_camera_for_parking = moving_to_ring_for_parking.to(camera_setup_for_parking)
 	park = camera_setup_for_parking.to(parking)
 	setup_camera_for_cylinder = parking.to(camera_setup_for_cylinder)
@@ -544,8 +638,10 @@ class MasterStateMachine(StateMachine):
 		super(MasterStateMachine, self).__init__()
 		self.node = master_node
   
-	def on_transition(self):
+	def on_transition(self, event, state):
+		print(f"Event: '{event}', previous state: '{state.id}'")
 		self.node.t1 = millis()
+		return "on_transition_return"
 		
 	def on_setup_camera_for_exploration(self):
 		self.node.setup_camera_for_ring_detection()
@@ -563,9 +659,7 @@ class MasterStateMachine(StateMachine):
 		self.node.find_cylinder()
   
 	def on_move_to_cylinder(self):
-		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.cylinder_position[0], self.node.cylinder_position[1])
-		print(f"original: {self.node.cylinder_position[0]}, {self.node.cylinder_position[1]} -new-> {fixed_x}, {fixed_y}")
-		self.node.go_to_pose(fixed_x, fixed_y)
+		self.node.go_to_pose(self.node.cylinder_position[0], self.node.cylinder_position[1])
   
 	def on_read_qr(self):
 		self.node.start_qr_reading()
@@ -583,14 +677,10 @@ class MasterStateMachine(StateMachine):
 		self.node.disable_exploration()
   
 	def on_move_to_ring_for_parking(self):
-		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.parking_ring_position[0], self.node.parking_ring_position[1])
-		print(f"original: {self.node.parking_ring_position[0]}, {self.node.parking_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
-		self.node.go_to_pose(fixed_x, fixed_y)
+		self.node.go_to_pose(self.node.parking_ring_position[0], self.node.parking_ring_position[1])
   
 	def on_move_to_genuine_painting(self):
-		fixed_x, fixed_y = self.node.get_valid_close_position(self.node.genuine_mona_lisa_position[0], self.node.genuine_mona_lisa_position[1])
-		print(f"original: {self.node.genuine_mona_lisa_position[0]}, {self.node.genuine_mona_lisa_position[1]} -new-> {fixed_x}, {fixed_y}")
-		self.node.go_to_pose(fixed_x, fixed_y)
+		self.node.go_to_pose(self.node.genuine_mona_lisa_position[0], self.node.genuine_mona_lisa_position[1])
 
 def main():
 	rclpy.init(args=None)
