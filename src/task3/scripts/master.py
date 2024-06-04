@@ -135,9 +135,9 @@ class MasterNode(Node):
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
 		self.time = rclpy.time.Time() #T0
 
-		self.tf_buffer = Buffer()
-		self.tf_listener = TransformListener(self.tf_buffer, self)
-		
+		self.go_to_person = False
+		self.talk_future = None
+
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
 
@@ -320,6 +320,11 @@ class MasterNode(Node):
 					self.sm.move_to_ring_for_parking()
 				else:
 					self.disable_exploration()
+			elif(self.go_to_person):
+				if((m_time - self.t1) > 2000):
+					self.sm.move_to_person()
+				else:
+					self.disable_exploration()
 			# else: 
 			# 	self.t1 = m_time
 
@@ -372,12 +377,22 @@ class MasterNode(Node):
 		self.people_count += 1
 		print(f"Found new person.")
 		self.last_person_seen = face_info
-		self.sm.move_to_person()
+		self.go_to_person = True
 	
 	def talk_to_person(self):
-		# TODO: implement
 		print("Talking to person")
-		pass
+
+		req = Trigger.Request()
+		self.talk_future  = self.greet_srv.call_async(req)
+		self.talk_future.add_done_callback(self.done_talking)
+		
+
+	def done_talking(self, future):
+		res = future.result()
+
+		print(f"Done talking: {res}")
+
+		self.sm.explore()
 
 	def send_ring_markers(self):
 		ma = MarkerArray()
@@ -525,8 +540,6 @@ class MasterNode(Node):
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
 		#ring_info.color_index = (ring_info.color_index + 1) % 4
 
-		ring_info.position = self.relative_to_world_pos(ring_info.position_relative)
-
 		min_dist, min_index = argmin(self.rings, dist_normal_fcn, ring_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
@@ -553,17 +566,6 @@ class MasterNode(Node):
 		self.cleanup_potential_people()
 		if(face_info.quality > self.person_quality_threshold):
 			self.found_new_person(face_info)
-		else: #Pojdi od blizje pogledat. (Priority Keypoint)
-			rx, ry = self.get_valid_close_position(face_info.position[0], face_info.position[1])
-			if(rx == face_info.position[0] and ry == face_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
-				return
-
-			wp = Waypoint()
-			wp.x = rx
-			wp.y = ry
-			wp.yaw = face_info.yaw_relative
-
-			self.priority_keypoint_pub.publish(wp)
 			
 		return
 
@@ -579,7 +581,6 @@ class MasterNode(Node):
 	
 	def people_callback(self, face_info : FaceInfo):
 		# TODO: only go to non-mona-lisas during exploration and only go to mona-lisas during painting search
-		face_info.position = self.relative_to_world_pos(face_info.position_relative)
 
 		min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
@@ -587,20 +588,6 @@ class MasterNode(Node):
 		else:
 			self.merge_person_with_target(min_index, face_info)
 		return
-	
-	def relative_to_world_pos(self, position_relative):
-		p1 = PointStamped()
-		p1.header.frame_id = "/rplidar_link"
-		p1.header.stamp = self.get_clock().now().to_msg()
-		p1.point = array2point(position_relative)
-
-		time_now = rclpy.time.Time()
-		timeout = Duration(seconds=10.0)
-		trans = self.tf_buffer.lookup_transform("map", "rplidar_link", time_now, timeout)	
-
-		p1 = tfg.do_transform_point(p1, trans)
-
-		return [p1.point.x, p1.point.y, p1.point.z]
 
 class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)
@@ -680,7 +667,11 @@ class MasterStateMachine(StateMachine):
 		self.node.go_to_pose(self.node.cylinder_position[0], self.node.cylinder_position[1])
 
 	def on_move_to_person(self):
+		# waypoint = self.node.relative_to_world_pos(np.array(self.node.last_person_seen.position_relative) + 0.3 * np.array(self.node.last_person_seen.normal_relative))
 		self.node.go_to_pose(self.node.last_person_seen.position[0], self.node.last_person_seen.position[1])
+
+	def on_exit_talking_to_person(self):
+		self.node.go_to_person = False
 
 	def on_talk_to_person(self):
 		self.node.talk_to_person()

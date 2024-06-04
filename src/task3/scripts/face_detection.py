@@ -88,6 +88,9 @@ class face_detection(Node):
 			parameters=[
 				('device', ''),
 		])
+
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 		
 		self.device = self.get_parameter('device').get_parameter_value().string_value
 		self.bridge = CvBridge()
@@ -209,6 +212,7 @@ class face_detection(Node):
 			finfo.normal_relative = normal.tolist()
 			finfo.yaw_relative = fi
 			finfo.quality = q_dist * q_angle * q_edges
+			finfo.position = self.relative_to_world_pos(p_center.tolist())
 			
 			finfo.is_mona = False
 			for c in contours_mona:
@@ -221,6 +225,20 @@ class face_detection(Node):
 		#cv2.imshow("Image", img)
 		#key = cv2.waitKey(1)
 		return	
+	
+	def relative_to_world_pos(self, position_relative):
+		p1 = PointStamped()
+		p1.header.frame_id = "/oakd_link"
+		p1.header.stamp = self.get_clock().now().to_msg()
+		p1.point = array2point(position_relative)
+
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=10.0)
+		trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)
+
+		p1 = tfg.do_transform_point(p1, trans)
+
+		return [p1.point.x, p1.point.y, p1.point.z]
 
 def main():
 	rclpy.init(args=None)

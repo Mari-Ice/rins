@@ -108,7 +108,6 @@ class Talker(Node):
 		# the function for text processing
 		print('processing text')
 		colors = []
-		object = ''
 		clue = False
 		
 		for color in self.colors:
@@ -121,8 +120,7 @@ class Talker(Node):
 		self.play_sound(self.goodbye, response)
 		if clue:
 			park = Park()
-			park.color = color
-			park.obj = object
+			park.color = colors
 			self.pub_park.publish(park)
 			
 		response.success = True
