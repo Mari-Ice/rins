@@ -117,6 +117,15 @@ def array2point(arr):
 	p.z = float(arr[2])
 	return p
 
+def compare_faces(face1, face2):
+	dist1 = np.linalg.norm(face1.origin + face1.normal * 0.25  - face2.origin)
+	dist2 = np.linalg.norm(face2.origin + face2.normal * 0.25  - face1.origin)
+	dist = min(dist1, dist2)
+	
+	cosfi = face1.normal.dot(face2.normal)
+	return (dist < 0.65) and (cosfi > -0.25)
+
+
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
@@ -145,6 +154,8 @@ class MasterNode(Node):
 
 		self.color_talker_srv = self.create_client(Color, '/say_color')
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
+
+		self.last_person_seen = None
 
 		self.exploration_active = False
 		self.parking_ring_position = [0,0]
@@ -228,6 +239,8 @@ class MasterNode(Node):
 			self.sm.camera_setup_for_qr()
 		elif(self.sm.moving_to_genuine_painting.is_active):
 			self.sm.stop()
+		elif(self.sm.moving_to_person.is_active):
+			self.sm.talk_to_person()
 		else:
 			raise ValueError("Unknown state")
 		return
@@ -358,7 +371,8 @@ class MasterNode(Node):
 	def found_new_person(self, face_info):
 		self.people_count += 1
 		print(f"Found new person.")
-		self.talk_to_person()
+		self.last_person_seen = face_info
+		self.sm.move_to_person()
 	
 	def talk_to_person(self):
 		# TODO: implement
@@ -548,6 +562,8 @@ class MasterNode(Node):
 			wp.x = rx
 			wp.y = ry
 			wp.yaw = face_info.yaw_relative
+
+			self.priority_keypoint_pub.publish(wp)
 			
 		return
 
@@ -590,8 +606,8 @@ class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)
 	camera_setup_for_exploration = State(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
 	exploring = State(MasterState.EXPLORING)
-	# moving_to_person = State(MasterState.MOVING_TO_PERSON)
-	# talking_to_person = State(MasterState.TALKING_TO_PERSON)
+	moving_to_person = State(MasterState.MOVING_TO_PERSON)
+	talking_to_person = State(MasterState.TALKING_TO_PERSON)
 	# validating_ring = State(MasterState.VALIDATING_RING)
 	# checking_info = State(MasterState.CHECKING_INFO)
 	moving_to_ring_for_parking = State(MasterState.MOVING_TO_RING_FOR_PARKING)
@@ -611,11 +627,11 @@ class MasterStateMachine(StateMachine):
 	done = State(MasterState.DONE, final=True)
 	
 	setup_camera_for_exploration = init.to(camera_setup_for_exploration) | reading_qr.to(camera_setup_for_exploration)
-	explore = camera_setup_for_exploration.to(exploring) # | talking_to_person.to(exploring) | validating_ring.to(exploring) | checking_info.to(exploring)
+	explore = camera_setup_for_exploration.to(exploring) | talking_to_person.to(exploring) # | validating_ring.to(exploring) | checking_info.to(exploring)
 	explore_paintings = camera_setup_for_exploration.to(searching_for_paintings) # | detecting_anomalies.to(searching_for_paintings)
 	
-	# move_to_person = exploring.to(moving_to_person)
-	# talk_to_person = moving_to_person.to(talking_to_person)
+	move_to_person = exploring.to(moving_to_person)
+	talk_to_person = moving_to_person.to(talking_to_person)
 	
 	# validate_ring = exploring.to(validating_ring)
 	
@@ -662,6 +678,12 @@ class MasterStateMachine(StateMachine):
   
 	def on_move_to_cylinder(self):
 		self.node.go_to_pose(self.node.cylinder_position[0], self.node.cylinder_position[1])
+
+	def on_move_to_person(self):
+		self.node.go_to_pose(self.node.last_person_seen.position[0], self.node.last_person_seen.position[1])
+
+	def on_talk_to_person(self):
+		self.node.talk_to_person()
   
 	def on_read_qr(self):
 		self.node.start_qr_reading()
