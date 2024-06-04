@@ -40,6 +40,9 @@ amcl_pose_qos = QoSProfile(
 #	Kamera naj bo v looking_for_rings polozaju.
 #	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
 
+def nothing(data):
+	pass
+
 def lin_map(x, from_min, from_max, to_min, to_max):
 	normalized_x = (x - from_min) / (from_max - from_min)
 	mapped_value = normalized_x * (to_max - to_min) + to_min
@@ -133,16 +136,13 @@ class RingDetection(Node):
 		cv2.moveWindow('Depth3',   830 ,500)
 		cv2.moveWindow('Depth4',   1245 ,500)
 
-		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
-		# cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
+		# cv2.createTrackbar('A', "Image", 0, 1000, nothing)
+		# cv2.createTrackbar('B', "Image", 0, 1000, nothing)
 		
 		cv2.createTrackbar('A', "Image", 0, 1000, nothing)
 		cv2.createTrackbar('B', "Image", 0, 1000, nothing)
 
 		self.start_time = time.time()
-
-	def nothing(self, data):
-		pass
 
 	def rgb_pc_callback(self, rgb, pc, depth_raw):
 
@@ -206,37 +206,38 @@ class RingDetection(Node):
 				circle_xyz = xyz[y1:y2,x1:x2]
 				circle_img  = img[y1:y2,x1:x2].copy()
 				circle_mask = mask1[y1:y2,x1:x2]
-				circle_img[circle_mask==0] = (0,0,0)
+				circle_img[circle_mask==0] = (255,0,255)
 				#cv2.imshow(f"Circle{j}_{i}", circle_img)
-
-				color = circle_img.sum(axis=(0,1))
-				color -= min(color)
-
-				color_max = max(color)
-				if(color_max == 0):
-					continue
-
-				color = (color / color_max)
-				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
-				color_uint = (color*255)
-				color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
-				color_index = int(((hue + 60)%360) / 120)
 
 				ring_points = circle_xyz[circle_mask != 0]
 				colors_set = circle_img[circle_mask != 0]
 				ring_position = np.sum(ring_points, axis=0) / len(ring_points)
+				avg_color = np.mean(colors_set, axis=0)
 
-				avg_color = np.sum(colors_set, axis=0) / len(colors_set)
 				if(avg_color[0] < 40 and avg_color[1] < 40 and avg_color[2] < 40):
 					color_index = 3 #black
 					color = (0.,0.,0.)
 					color_uint = (0,0,0)
+				else:
+					color = avg_color - min(avg_color)
+					color_max = max(color)
+					if(color_max == 0):
+						continue
+
+					color = (color / color_max)
+					hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
+					color_uint = (color*255)
+					color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
+					color_index = int(((hue + 60)%360) / 120)
 
 				color_names = ["red", "green", "blue", "black"]
 				color_name = color_names[color_index]
 
 				color_dist_sq = (colors_set - avg_color)**2
 				avg_color_dist = np.mean(color_dist_sq)
+
+				if(color_index == 3):#black
+					avg_color_dist *= 0.1
 
 				q_colors	= math.exp(-0.0004*avg_color_dist)
 				q_size	    = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
@@ -254,7 +255,7 @@ class RingDetection(Node):
 				msg.color = [color[2], color[1], color[0]]
 				msg.color_index = color_index
 		
-				#Zadevo je treba prej transformirat v globalne koordiante.
+				#Zadevo je treba prej transformirat v globalne koordiante.:Nope. to bo naredil master.
 				time_now = rclpy.time.Time()
 				timeout = Duration(seconds=0.5)
 				transform = self.tf_buffer.lookup_transform("map", "top_camera_link", time_now, timeout)	

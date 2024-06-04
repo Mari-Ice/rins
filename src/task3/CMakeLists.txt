@@ -33,14 +33,29 @@ set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf
 set(dependencies rclcpp std_msgs geometry_msgs sensor_msgs visualization_msgs tf2 tf2_geometry_msgs pcl_conversions rosidl_default_generators message_filters)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+<<<<<<< ours
   #"srv/Color.srv"
   #"msg/RingInfo.msg"
   #"msg/CylinderInfo.msg"
   #"msg/Waypoint.msg"
   "msg/FaceInfo.msg"
+||||||| base
+  "srv/Color.srv"
+  "msg/RingInfo.msg"
+  "msg/CylinderInfo.msg"
+  "msg/Waypoint.msg"
+=======
+  "srv/Color.srv"
+  "msg/RingInfo.msg"
+  "msg/CylinderInfo.msg"
+  "msg/Waypoint.msg"
+  "msg/AnomalyInfo.msg"
+  "msg/PeopleInfo.msg"
+>>>>>>> theirs
 )
 
 install(PROGRAMS
+<<<<<<< ours
   #scripts/autonomous_explorer.py
   #scripts/talker.py
   #scripts/ring_detection.py
@@ -48,6 +63,22 @@ install(PROGRAMS
   #scripts/park.py
   #scripts/cylinder_detection.py
   scripts/face_detection.py
+||||||| base
+  scripts/autonomous_explorer.py
+  scripts/talker.py
+  scripts/ring_detection.py
+  scripts/master.py
+  scripts/park.py
+  scripts/cylinder_detection.py
+=======
+  scripts/autonomous_explorer.py
+  scripts/talker.py
+  scripts/ring_detection.py
+  scripts/master.py
+  scripts/park.py
+  scripts/cylinder_detection.py
+  scripts/face_extractor.py
+>>>>>>> theirs
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY

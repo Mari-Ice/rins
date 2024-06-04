@@ -97,9 +97,15 @@ class face_detection(Node):
 		self.tf_listener = TransformListener(self.tf_buffer, self)
 
 		self.model = YOLO("yolov8n.pt")
+		self.received_any_data = False
+		print("Init")
 		return
 
 	def sensors_callback(self, rgb_data, pc_data):
+		if(not self.received_any_data):
+			self.received_any_data = True
+			print("Data\nOK")
+
 		img = None
 		try:
 			img = self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
@@ -192,8 +198,6 @@ class face_detection(Node):
 		return	
 
 def main():
-	print('Face detection node starting.')
-
 	rclpy.init(args=None)
 	node = face_detection()
 	rclpy.spin(node)
