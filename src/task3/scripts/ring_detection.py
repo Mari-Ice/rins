@@ -26,19 +26,16 @@ from geometry_msgs.msg import Point
 from geometry_msgs.msg import PointStamped
 from geometry_msgs.msg import Quaternion, PoseStamped, PoseWithCovarianceStamped
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Header
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv
 from lifecycle_msgs.srv import GetState
-from task2.msg import RingInfo
-
-amcl_pose_qos = QoSProfile(
-		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
-		  reliability=QoSReliabilityPolicy.RELIABLE,
-		  history=QoSHistoryPolicy.KEEP_LAST,
-		  depth=1)
-
+from task3.msg import RingInfo
 
 #	Kamera naj bo v looking_for_rings polozaju.
 #	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
+
+def nothing(data):
+	pass
 
 def lin_map(x, from_min, from_max, to_min, to_max):
 	normalized_x = (x - from_min) / (from_max - from_min)
@@ -46,6 +43,32 @@ def lin_map(x, from_min, from_max, to_min, to_max):
 	return mapped_value
 def clamp(x, min_x, max_x):
 	return min(max(x,min_x),max_x)
+
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
+
+def create_point_marker(position, header):
+	marker = Marker()
+	marker.header = header
+	
+	marker.type = 2
+	
+	scale = 0.1
+	marker.scale.x = scale
+	marker.scale.y = scale
+	marker.scale.z = scale
+	
+	marker.color.r = 1.0
+	marker.color.g = 1.0
+	marker.color.b = 1.0
+	marker.color.a = 1.0
+	marker.pose.position = array2point(position)
+	
+	return marker
 		
 def separate(depth, dep=0):
 	gut = np.sort(depth[depth!=0])
@@ -98,57 +121,25 @@ class RingDetection(Node):
 
 		self.bridge = CvBridge()
 
-		# For listening and loading the TF
-		self.tf_buffer = Buffer()
-		self.tf_listener = TransformListener(self.tf_buffer, self)
-
 		self.rgb_sub = message_filters.Subscriber(self, Image,		 "/top_camera/rgb/preview/image_raw")
 		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/top_camera/rgb/preview/depth/points")
 		self.depth_sub = message_filters.Subscriber(self, Image,	 "/top_camera/rgb/preview/depth")
 
-		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 10, 0.3, allow_headerless=False) 
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 10, 0.03, allow_headerless=False) 
 		self.ts.registerCallback(self.rgb_pc_callback)
 
 		#msg publisher
 		self.ring_info_pub = self.create_publisher(RingInfo, "/ring_info", QoSReliabilityPolicy.BEST_EFFORT)
+		self.ring_marker_pub = self.create_publisher(Marker, "/ring_marker", QoSReliabilityPolicy.BEST_EFFORT)
 
 		cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
-
-		# cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
-
-		# cv2.namedWindow("Depth0", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth1", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth2", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth3", cv2.WINDOW_NORMAL)
-		# cv2.namedWindow("Depth4", cv2.WINDOW_NORMAL)
-
-		cv2.waitKey(1)
-		cv2.moveWindow('Image',  1   ,1)
-		cv2.moveWindow('Mask',   415 ,1)
-		cv2.moveWindow('Depth',   830 ,1)
-
-		cv2.moveWindow('Depth1',   1 ,500)
-		cv2.moveWindow('Depth2',   415 ,500)
-		cv2.moveWindow('Depth3',   830 ,500)
-		cv2.moveWindow('Depth4',   1245 ,500)
-
-		# cv2.createTrackbar('A', "Image", 0, 1000, self.nothing)
-		# cv2.createTrackbar('B', "Image", 0, 1000, self.nothing)
-		
-		#cv2.setTrackbarPos("A", "Image", 100)
-		#cv2.setTrackbarPos("B", "Image", 200)
-
-
-		self.start_time = time.time()
-
-	def nothing(self, data):
-		pass
+		self.received_any_data = False
+		print("Init")
 
 	def rgb_pc_callback(self, rgb, pc, depth_raw):
-
-		if((time.time() - self.start_time) < 3):
-			return
+		if(not self.received_any_data):
+			self.received_any_data = True
+			print("Data\nOK")
 
 		cv2.waitKey(1)
 		img = self.bridge.imgmsg_to_cv2(rgb, "bgr8")
@@ -172,12 +163,12 @@ class RingDetection(Node):
 
 		img_display = img.copy()
 		mask = np.full((height, width), 0, dtype=np.uint8)
-		mask[(xyz[:,:,1] > -0.162) & (xyz[:,:,1] < 1000)] = 255
+		mask[(xyz[:,:,1] > -0.162) & (xyz[:,:,1] < 1000)] = 255 #Height masking and depth image masking
 		
 		depth = depth_raw.copy()
 		depth[mask!=255] = 0
 
-		masks = separate(depth) #okej tole torej dela kjut razdeli glede na globino. To bi torej lahko blo plug'n play v detect rings2?
+		masks = separate(depth) 
 		for j,m in enumerate(masks):
 			#cv2.imshow(f"Depth{j}", m)
 			mask1 = m
@@ -207,31 +198,29 @@ class RingDetection(Node):
 				circle_xyz = xyz[y1:y2,x1:x2]
 				circle_img  = img[y1:y2,x1:x2].copy()
 				circle_mask = mask1[y1:y2,x1:x2]
-				circle_img[circle_mask==0] = (0,0,0)
+				circle_img[circle_mask==0] = (255,0,255)
 				#cv2.imshow(f"Circle{j}_{i}", circle_img)
-
-				color = circle_img.sum(axis=(0,1))
-				color -= min(color)
-
-				color_max = max(color)
-				if(color_max == 0):
-					continue
-
-				color = (color / color_max)
-				hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
-				color_uint = (color*255)
-				color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
-				color_index = int(((hue + 60)%360) / 120)
 
 				ring_points = circle_xyz[circle_mask != 0]
 				colors_set = circle_img[circle_mask != 0]
 				ring_position = np.sum(ring_points, axis=0) / len(ring_points)
+				avg_color = np.mean(colors_set, axis=0)
 
-				avg_color = np.sum(colors_set, axis=0) / len(colors_set)
 				if(avg_color[0] < 40 and avg_color[1] < 40 and avg_color[2] < 40):
 					color_index = 3 #black
 					color = (0.,0.,0.)
 					color_uint = (0,0,0)
+				else:
+					color = avg_color - min(avg_color)
+					color_max = max(color)
+					if(color_max == 0):
+						continue
+
+					color = (color / color_max)
+					hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
+					color_uint = (color*255)
+					color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
+					color_index = int(((hue + 60)%360) / 120)
 
 				color_names = ["red", "green", "blue", "black"]
 				color_name = color_names[color_index]
@@ -239,8 +228,11 @@ class RingDetection(Node):
 				color_dist_sq = (colors_set - avg_color)**2
 				avg_color_dist = np.mean(color_dist_sq)
 
+				if(color_index == 3):#black
+					avg_color_dist *= 0.1
+
 				q_colors	= math.exp(-0.0004*avg_color_dist)
-				q_size	  = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
+				q_size	    = 1.0-math.exp(-10.0*(min(w,h) / min(width,height)))
 				q_okroglost = math.exp(-3.27*(1-min(w,h)/max(w,h))**2)
 				q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(ring_position))**2)
 
@@ -249,25 +241,30 @@ class RingDetection(Node):
 				cv2.rectangle(img_display, (x1, y1), (x2, y2), color_uint, 1)
 				cv2.putText(img_display, color_name, (x2 ,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color_uint, 2)
 				cv2.putText(img_display, f"{q:.2f}", (x2 ,cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_uint, 2)
-				
-				msg = RingInfo()
-				msg.q = q
-				msg.color = [color[2], color[1], color[0]]
-				msg.color_index = color_index
-		
-				#Zadevo je treba prej transformirat v globalne koordiante.
-				time_now = rclpy.time.Time()
-				timeout = Duration(seconds=0.5)
-				transform = self.tf_buffer.lookup_transform("map", "top_camera_link", time_now, timeout)	
+			
+				#Calc ring norma
+				left_point_index = np.argmin(ring_points, axis=0)[0]
+				left_point = ring_points[left_point_index]
+				normal = np.cross(np.array([0,1,0]), (ring_position - left_point))
+				normal[1] = 0
+				nlen = np.linalg.norm(normal)
+				if(nlen > 0.0001):
+					normal /= nlen
 
-				position_point = PointStamped() #robot global pos
-				position_point.header.frame_id = "/map"
-				position_point.header.stamp = rgb.header.stamp
-				position_point.point.x = float(ring_position[2])
-				position_point.point.y = float(ring_position[0])
-				position_point.point.z = float(ring_position[1])
-				pp_global = tfg.do_transform_point(position_point, transform)
-				msg.position = [float(pp_global.point.x), float(pp_global.point.y), float(pp_global.point.z)]
+				#Ustvarimo marker
+				marker_header = Header()
+				marker_header.frame_id = "/top_camera_link"
+				marker_header.stamp = rgb.header.stamp
+				marker = create_point_marker([float(ring_position[2]), float(ring_position[0]), float(ring_position[1])], marker_header)
+				marker.id = random.randint(1,100000)
+				marker.lifetime = Duration(seconds=.1).to_msg()
+				self.ring_marker_pub.publish(marker)
+
+				msg = RingInfo()
+				msg.color_index = color_index
+				msg.position_relative = [float(ring_position[2]), float(ring_position[0]), float(ring_position[1])]
+				msg.normal_relative = [float(normal[2]), float(normal[0]), float(normal[1])]
+				msg.q = q
 				self.ring_info_pub.publish(msg)
 
 		cv2.imshow("Image", img_display)
