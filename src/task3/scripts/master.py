@@ -35,7 +35,7 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo, Park
+from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo, Park, CylinderInfo
 from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
@@ -131,6 +131,8 @@ class MasterNode(Node):
 		super().__init__('master_node')
   
 		self.sm = MasterStateMachine(self)
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
 		self.time = rclpy.time.Time() #T0
@@ -143,9 +145,11 @@ class MasterNode(Node):
 
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
+		self.cylinder_sub = self.create_subscription(CylinderInfo, "/cylinder_info", self.cylinder_callback, qos_profile_sensor_data)
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
 
 		self.park_srv = self.create_client(Trigger, '/park_cmd')
 		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
@@ -157,6 +161,7 @@ class MasterNode(Node):
 
 		self.color_talker_srv = self.create_client(Color, '/say_color')
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
+		self.read_qr_srv = self.create_client(Trigger, '/read_qr')
 
 		self.last_person_seen = None
 
@@ -176,10 +181,14 @@ class MasterNode(Node):
 		self.people = []
 		self.monas_count = 0
 		self.monas = []
+		self.last_cylinder = None
+		self.last_cylinder_dist = None
+		
 
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
 		self.person_quality_threshold = 0.1 # TODO: determine threshold
+		self.cylinder_threshold = 0.1 # TODO: determine threshold
 		self.t1 = millis()
 
 		self.ros_occupancy_grid = None
@@ -197,6 +206,18 @@ class MasterNode(Node):
 	def clock_callback(self, msg):
 		self.time = msg.clock
 		return
+
+	def relative_to_global(self, relative, link="/rplidar"):
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=0.5)
+		transform = self.tf_buffer.lookup_transform("map", link, time_now, timeout)	
+
+		position_point = PointStamped() #robot global pos
+		position_point.header.frame_id = "/map"
+		position_point.header.stamp = time.time()
+		position_point.point = array2point(relative)
+		pp_global = tfg.do_transform_point(position_point, transform)
+		return [pp_global.x, pp_global.y, pp_global.z]
 
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
@@ -456,12 +477,27 @@ class MasterNode(Node):
 
 	def find_cylinder(self):
 		# TODO: implement (rotate in place, run cylinder detection, once correct cylinder is found call self.sm.move_to_cylinder())
-		pass
+		print("finding cylinder")
+		self.last_cylinder = None
+		self.last_cylinder_dist = None
+
+		pose = self.relative_to_global([0, 0, 0])
+		self.go_to_pose(pose[0], pose[1])
+		# TODO: rotate in place
+
+		if(self.last_cylinder):
+			print("found at least one cylinder")
+			if(self.last_cylinder_dist < 2.):
+				print("Going to cylinder")
+				self.go_to_pose(self.last_cylinder.position[0], self.last_cylinder.position[1])
+				self.setup_camera_for_parking()
+				# TODO: move close to cylinder to read qr code
+		# TODO: change state
 
 	def start_qr_reading(self):
-		# TODO: start reading QR code
-		pass
-	
+		self.read_qr_srv.call_async(Trigger.Request())
+
+
  	# TODO: call this when qr reading finishes
 	def qr_reading_ended(self):
 		self.qr_code_read = True
@@ -607,6 +643,14 @@ class MasterNode(Node):
 		else:
 			self.potential_parking_spots = self.potential_parking_spots.intersection(set(park_info.colors))
 
+	
+	def cylinder_callback(self, cylinder_info):
+		if(cylinder_info.quality > self.cylinder_threshold):
+			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative)
+			self.last_cylinder = cylinder_info
+			self.last_cylinder_dist = np.linalg.norm(cylinder_info.position_relative)
+		
+			
 
 class MasterStateMachine(StateMachine):
 	init = State(MasterState.INIT, initial=True)
