@@ -81,15 +81,21 @@ class CylinderDetection(Node):
 		self.rgb_sub = message_filters.Subscriber(self, Image, "/oakd/rgb/preview/image_raw")
 		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/oakd/rgb/preview/depth/points")
 		self.depth_sub = message_filters.Subscriber(self, Image,	 "/oakd/rgb/preview/depth")
-		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 20, 1.0, allow_headerless=False) 
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_sub, self.pc_sub, self.depth_sub], 20, 0.03, allow_headerless=False) 
 		self.ts.registerCallback(self.sensors_callback)
 
 		self.marker_pub = self.create_publisher(Marker, "/cylinder_marker", QoSReliabilityPolicy.BEST_EFFORT)
+		self.data_pub = self.create_publisher(CylinderInfo, "/cylinder_info", QoSReliabilityPolicy.BEST_EFFORT)
 
+		self.received_any_data = False
 		print("Init")
 		return
 
 	def sensors_callback(self, rgb_data, pc, depth_data):
+		if(not self.received_any_data):
+			self.received_any_data = True
+			print("Data\nOK")
+
 		# Prep data formats
 		img 	= self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
 		height	= pc.height
@@ -99,13 +105,13 @@ class CylinderDetection(Node):
 		depth_raw = self.bridge.imgmsg_to_cv2(depth_data, "32FC1")
 		depth_raw[depth_raw==np.inf] = 0
 		hsv_image = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-		# print(width, height, depth_raw.shape)
+		img_display = img.copy()
 
 		cylinder_mask = np.zeros((height, width), dtype=np.uint8)
-		cylinder_mask[hsv_image[:,:,1] > 100] = 255					#Color mask
+		cylinder_mask[(hsv_image[:,:,1] > 100) | (hsv_image[:,:,2] < 40)] = 255					#Color mask
 		cylinder_mask[(xyz[:,:,2] < -0.19) | (xyz[:,:,2] > 0.15)] = 0 #Height mask
-		#TODO: popravi za crno barvo
+
+		#cv2.imshow(f"Mask", cylinder_mask)
 
 		cv2.waitKey(1)
 
@@ -113,47 +119,37 @@ class CylinderDetection(Node):
 		for i,c in enumerate(contours_tupled):
 			c = cv2.convexHull(c)
 			x1, y1, width, height = cv2.boundingRect(c)	
-			if(width < 20 or height < 50): #TODO: Nastavi prave meje...
+			if(width < 20 or height < 50):
 				continue
 			x2 = x1 + width
 			y2 = y1 + height	
 
-			# TODO
+			# TODO, Meh, zis okaj
 			x1 += 5
 			y1 += 5
 			x2 -= 5
 			y2 -= 5
+			width -= 10
+			height -= 10
 
-			per_cylinder_depth = depth_raw[y1:y2,x1:x2]
-			pcs = per_cylinder_depth.copy()
-			pcs -= np.min(pcs)
-			pcs /= np.max(pcs)
+			per_cylinder_depth = depth_raw[y1:y2,x1:x2].copy()
 
-			#cv2.imshow(f"Cylinder", pcs)
-			#continue
 			line_gradient = np.mean(per_cylinder_depth, axis=0)
-			min_index = np.argmin(line_gradient)
+			line_gradient -= np.min(line_gradient)
+			line_gradient /= 0.3
 
-			if(min_index < 10):
+			der = line_gradient[1:] - line_gradient[0:-1]
+
+			if(der[0] > 0 or der[-1] < 0):
 				continue
 
-			line_gradient -= line_gradient[min_index]
-		
-			der = line_gradient[1:min_index+1] - line_gradient[0:min_index]
-			k = (der[-1] - der[0]) / len(der)
-			n = der[0]
-
-			x = np.arange(0,min_index)
-			x = k*x + n
-
-			#print(np.sum(abs(der - x)))
-			error = np.sum(abs(der - x))
-			if(error > 1.0):
+			k, n = np.polyfit(np.arange(0,len(der)),der,1)
+			
+			if(k < 0.00001 or k > 0.01):
 				continue
 
-			# Probamo prvo opcijo 1:
+
 			per_cylinder_pc = xyz[y1:y2,x1:x2]
-
 			closest = xyz[int(y1+height/2),int(x1+width/2)]
 			closest_dir = closest.copy() / np.linalg.norm(closest)
 			center = closest + closest_dir * 0.125
@@ -164,28 +160,40 @@ class CylinderDetection(Node):
 			cmarker = create_point_marker(center, cheader)
 			self.marker_pub.publish(cmarker)
 
-			# Ekstra podatki ki jih racunamo
+			# Ekstra podatki ki jih racunamo (barva, polozaj, razdalja, kvaliteta, kot)
 			per_cylinder_img = img[y1:y2,x1:x2]
-			cv2.imshow(f"Cylinder", per_cylinder_img)
+			img_pixels = np.reshape(per_cylinder_img, (-1,3))
 
-			# avg_color = np.mean(per_cylinder_img, axis=0)	
-			# color_dist_sq = (per_cylinder_img[:] - avg_color)**2
-			# avg_color_dist = np.mean(color_dist_sq)
+			avg_color = np.mean(img_pixels, axis=0)	
+
+			color_dist_sq = (img_pixels - avg_color)**2
+			avg_color_dist = np.mean(color_dist_sq)
 			
-			# per_cylinder_img_hsv = hsv_image[y1:y2,x1:x2]
-			# avg_hsv = np.mean(per_cylinder_img_hsv, axis=0)	
-			# color_index = int(((avg_hsv[0] + 45)%256) / 85) #Mogoce niso prave vresnoti tuke
+			per_cylinder_img_hsv = hsv_image[y1:y2,x1:x2]
+			per_cylinder_hsv_values = np.reshape(per_cylinder_img_hsv, (-1,3))
 
-			# q_color	= math.exp(-0.0004*avg_color_dist)
-			# q_size = 1
-			# q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(center))**2)
+			avg_hsv = np.mean(per_cylinder_hsv_values, axis=0)	
+			hue = int(avg_hsv[0] * 360/255)
+			color_index = int(((hue + 60)%360) / 120)
 
-			# cinfo = CylinderInfo()
-			# cinfo.color_index = color_index
-			# cinfo.color = avg_color.tolist()
-			# cinfo.position = center.tolist()
-			# cinfo.quality = q_color * q_size * q_distance
+			if(avg_color[0] < 40 and avg_color[1] < 40 and avg_color[2] < 40):
+				color_index = 3 #black
+
+			q_color	= math.exp(-0.0004*avg_color_dist)
+			q_size = 1
+			q_distance  = math.exp(-0.08*(0.15 - np.linalg.norm(center))**2)
+
+			cinfo = CylinderInfo()
+			cinfo.color_index = color_index
+			cinfo.color = avg_color.tolist()
+			cinfo.position_relative = center.tolist()
+			cinfo.yaw_relative = math.atan2(center[1], center[0])
+			cinfo.quality = q_color * q_size * q_distance
+			self.data_pub.publish(cinfo)
+
+			img_display = cv2.rectangle(img_display, (x1, y1), (x2,y2), (0,0,255), 2)
 			
+		# cv2.imshow(f"Image", img_display)
 		return
 
 def main():
