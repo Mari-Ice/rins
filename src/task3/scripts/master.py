@@ -140,6 +140,8 @@ class MasterNode(Node):
 		self.go_to_person = False
 		self.talk_future = None
 
+		self.go_to_mona = False
+
 		self.potential_parking_spots = None
 		self.park_sub = self.create_subscription(Park, '/park_near_obj', self.parking_info_callback, QoSReliabilityPolicy.BEST_EFFORT)
 
@@ -164,6 +166,7 @@ class MasterNode(Node):
 		self.read_qr_srv = self.create_client(Trigger, '/read_qr')
 
 		self.last_person_seen = None
+		self.last_mona_seen = None
 
 		self.ring_position = {}
 
@@ -207,17 +210,17 @@ class MasterNode(Node):
 		self.time = msg.clock
 		return
 
-	def relative_to_global(self, relative, link="/rplidar"):
+	def relative_to_global(self, relative, link="rplidar_link"):
 		time_now = rclpy.time.Time()
 		timeout = Duration(seconds=0.5)
 		transform = self.tf_buffer.lookup_transform("map", link, time_now, timeout)	
 
 		position_point = PointStamped() #robot global pos
 		position_point.header.frame_id = "/map"
-		position_point.header.stamp = time.time()
+		position_point.header.stamp = self.get_clock().now().to_msg()
 		position_point.point = array2point(relative)
 		pp_global = tfg.do_transform_point(position_point, transform)
-		return [pp_global.x, pp_global.y, pp_global.z]
+		return [pp_global.point.x, pp_global.point.y, pp_global.point.z]
 
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
@@ -363,6 +366,11 @@ class MasterNode(Node):
 		elif(self.sm.camera_setup_for_qr.is_active):
 			if((m_time - self.t1) > 3000):
 				self.sm.read_qr()
+
+		elif(self.sm.reading_qr.is_active):
+			# TODO: wait until qur code is actually read
+			if((m_time - self.t1) > 3000):
+				self.sm.setup_camera_for_exploration()
     
 		elif(self.sm.searching_for_paintings.is_active):
 			if(self.found_all_mona_lisas()):
@@ -410,6 +418,13 @@ class MasterNode(Node):
 		print(f"Found new person.")
 		self.last_person_seen = face_info
 		self.go_to_person = True
+
+	def found_new_mona(self, face_info):
+		self.monas_count += 1
+		print(f"Found new mona.")
+		self.last_mona_seen = face_info
+		self.go_to_mona = True
+	
 	
 	def talk_to_person(self):
 		print("Talking to person")
@@ -478,24 +493,22 @@ class MasterNode(Node):
 	def find_cylinder(self):
 		# TODO: implement (rotate in place, run cylinder detection, once correct cylinder is found call self.sm.move_to_cylinder())
 		print("finding cylinder")
-		self.last_cylinder = None
+		self.cylinder_position = None
 		self.last_cylinder_dist = None
 
 		pose = self.relative_to_global([0, 0, 0])
 		self.go_to_pose(pose[0], pose[1])
 		# TODO: rotate in place
 
-		if(self.last_cylinder):
+		if(self.cylinder_position):
 			print("found at least one cylinder")
 			if(self.last_cylinder_dist < 2.):
 				print("Going to cylinder")
-				self.go_to_pose(self.last_cylinder.position[0], self.last_cylinder.position[1])
-				self.setup_camera_for_parking()
-				# TODO: move close to cylinder to read qr code
-		# TODO: change state
+				self.sm.move_to_cylinder()
 
 	def start_qr_reading(self):
 		self.read_qr_srv.call_async(Trigger.Request())
+		self.qr_code_read = True # TODO: actually check if qr code is read
 
 
  	# TODO: call this when qr reading finishes
@@ -626,16 +639,57 @@ class MasterNode(Node):
 		self.people[target_index] = result
 		return
 	
+	def cleanup_potential_monas(self): 
+		for j, fi in enumerate(self.monas):
+			if(fi[0].quality < self.mona_quality_threshold):
+				continue
+
+			for i,ri in enumerate(self.monas):
+				if(ri[0].quality >= self.mona_quality_threshold):
+					continue
+				
+				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
+				if(dist < 1.0):
+					self.monas.remove(ri)
+		return
+	
+	def add_new_mona(self, face_info):
+		self.monas.append([face_info, face_info])
+		self.cleanup_potential_monas()
+		if(face_info.quality > self.mona_quality_threshold):
+			self.found_new_mona(face_info)
+			
+		return
+
+	def merge_mona_with_target(self, target_index, face_info):
+		result = [self.monas[target_index][0], face_info]
+		if(face_info.quality > self.mona_quality_threshold and result[0].quality <= self.mona_quality_threshold):
+			self.found_new_mona(face_info)
+		if(face_info.quality > result[0].quality):
+			result = [face_info, face_info]
+				
+		self.monas[target_index] = result
+		return
+	
 	def people_callback(self, face_info : FaceInfo):
 		# TODO: only go to non-mona-lisas during exploration and only go to mona-lisas during painting search
 
-		min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
-		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
-			self.add_new_person(face_info)	
-		else:
-			self.merge_person_with_target(min_index, face_info)
-		return
-	
+		if(not face_info.is_mona and self.sm.exploring.is_active):
+			min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
+			if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
+				self.add_new_person(face_info)	
+			else:
+				self.merge_person_with_target(min_index, face_info)
+			return
+		
+		if(face_info.is_mona and self.sm.searching_for_paintings.is_active):
+			min_dist, min_index = argmin(self.monas, dist_normal_fcn, face_info)
+			if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
+				self.add_new_mona(face_info)	
+			else:
+				self.merge_mona_with_target(min_index, face_info)
+			return
+		
 	def parking_info_callback(self, park_info):
 		print(f"Park info: {park_info.colors}")
 		if(self.potential_parking_spots is None):
@@ -647,7 +701,7 @@ class MasterNode(Node):
 	def cylinder_callback(self, cylinder_info):
 		if(cylinder_info.quality > self.cylinder_threshold):
 			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative)
-			self.last_cylinder = cylinder_info
+			self.cylinder_position = cylinder_info.position
 			self.last_cylinder_dist = np.linalg.norm(cylinder_info.position_relative)
 		
 			
