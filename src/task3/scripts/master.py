@@ -222,6 +222,22 @@ class MasterNode(Node):
 		pp_global = tfg.do_transform_point(position_point, transform)
 		return [pp_global.point.x, pp_global.point.y, pp_global.point.z]
 
+	def rotate_on_point(self, x, y):
+		wp = Waypoint()
+		wp.x = x
+		wp.y = y
+		wp.yaw = 0. 
+
+		#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,...
+		self.priority_keypoint_pub.publish(wp)
+		wp.yaw = math.pi/2 
+		self.priority_keypoint_pub.publish(wp)
+		wp.yaw = math.pi 
+		self.priority_keypoint_pub.publish(wp)
+		wp.yaw = 3*math.pi/2
+		self.priority_keypoint_pub.publish(wp)
+		return
+	
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
 		goal_pose.header.frame_id = 'map'
@@ -497,8 +513,7 @@ class MasterNode(Node):
 		self.last_cylinder_dist = None
 
 		pose = self.relative_to_global([0, 0, 0])
-		self.go_to_pose(pose[0], pose[1])
-		# TODO: rotate in place
+		self.rotate(pose[0], pose[1])
 
 		if(self.cylinder_position):
 			print("found at least one cylinder")
@@ -564,19 +579,7 @@ class MasterNode(Node):
 			if(rx == ring_info.position[0] and ry == ring_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
 				return
 
-			wp = Waypoint()
-			wp.x = rx
-			wp.y = ry
-			wp.yaw = 0. #TODO, theta.
-
-			#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,... #TODO to bi se lahko lepse v autonom. nodu naredlo
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi/2 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = 3*math.pi/2
-			self.priority_keypoint_pub.publish(wp)
+			self.rotate_on_point(rx, ry)
 			
 		return
 
