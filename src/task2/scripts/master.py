@@ -289,6 +289,7 @@ class MasterNode(Node):
 		return
 
 	def send_ring_markers(self):
+		self.cleanup_potential_rings()
 		ma = MarkerArray()
 
 		for i, r in enumerate(self.rings):
@@ -306,7 +307,6 @@ class MasterNode(Node):
 			ma.markers.append(marker)
 		
 		self.ring_markers_pub.publish(ma)	
-		self.cleanup_potential_rings()
 		return
 
 	def setup_camera_for_ring_detection(self):
@@ -368,7 +368,7 @@ class MasterNode(Node):
 		if(ring_info.q > self.ring_quality_threshold):
 			self.found_new_ring(ring_info)
 		else: #Pojdi od blizje pogledat. (Priority Keypoint)
-			rx, ry = self.get_valid_close_position(ring_info.position[0], ring_info.position[1])
+			rx, ry = self.get_valid_close_position(ring_info.position[0], ring_info.position[1]) #TODO glede na normo.
 			if(rx == ring_info.position[0] and ry == ring_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
 				return
 

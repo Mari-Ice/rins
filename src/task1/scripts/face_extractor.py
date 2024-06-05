@@ -130,10 +130,10 @@ class face_extractor(Node):
 		
 		train_folder = f"{self.gpath}/mona_images"
 		self.pca = None
-		# matrix = prepare_data(train_folder, resize=True, n=self.n, m=self.m)
-		# self.pca = fit_pca(matrix, n_components=220)
-		# pk.dump(self.pca, open("pca.pkl","wb"))
-		self.pca = pk.load(open("pca.pkl",'rb')) 
+		matrix = prepare_data(train_folder, resize=True, n=self.n, m=self.m)
+		self.pca = fit_pca(matrix, n_components=220)
+		pk.dump(self.pca, open("pca.pkl","wb"))
+		#self.pca = pk.load(open("pca.pkl",'rb')) 
 
 		self.min_img = None
 		self.min_img_inited = False

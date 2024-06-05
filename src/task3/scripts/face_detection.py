@@ -111,7 +111,7 @@ class face_detection(Node):
 			return
 
 		faces = []
-		res = self.model.predict(img, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
+		res = self.model.predict(img, imgsz=(480, 480), show=False, verbose=False, classes=[0], device=self.device)
 		for x in res:
 			for box in x.boxes.xyxy:
 				box = [ int(min(box[0],box[2])), int(min(box[1], box[3])), int(max(box[0],box[2])), int(max(box[1], box[3]))]
@@ -149,15 +149,14 @@ class face_detection(Node):
 			v1 = vec_normalize(p2 - p1)
 			v2 = vec_normalize(p3 - p1)
 
-			#p_center = np.mean(pc_xyz[mask != 0], axis=0)
-			p_center2 = 0.5*(p2 + p3)
-			p_center3 = 0.5*(p1 + p4)
-			p_center = p_center2
+			p_center = np.mean(pc_xyz[mask != 0], axis=0)
+			#p_center = 0.5*(p2 + p3)
+			p_center2 = 0.5*(p1 + p4)
 
-			if(np.linalg.norm(p_center2 - p_center) > 0.1 or np.linalg.norm(p_center3 - p_center) > 0.1):
+			if(np.linalg.norm(p_center2 - p_center) > 0.1):
 				continue
 		
-			normal = np.cross(v1,v2)
+			normal = np.cross(v2,v1)
 			mag = np.linalg.norm(normal)
 			if(abs(mag) < 0.0001):
 				continue
@@ -166,9 +165,15 @@ class face_detection(Node):
 			img = cv2.rectangle(img, (face[0], face[1]), (face[2], face[3]), (0,0,255), 2)
 
 			marker = create_point_marker(p_center, marker_header)
-			marker.id = 10 * i + 0
+			marker.id = i
 			marker.lifetime = Duration(seconds=.2).to_msg()
 			self.marker_pub.publish(marker)
+		
+			## Normala
+			# marker = create_point_marker(p_center + normal * 0.25, marker_header)
+			# marker.id = 100 + i 
+			# marker.lifetime = Duration(seconds=.2).to_msg()
+			# self.marker_pub.publish(marker)
 
 			#FaceInfo
 			fi = math.atan2(p_center[1], p_center[0])
@@ -187,8 +192,9 @@ class face_detection(Node):
 			
 			self.data_pub.publish(finfo)
 
-		#cv2.imshow("Image", img)
-		#key = cv2.waitKey(1)
+		cv2.imshow("Image", img)
+		# cv2.imshow("HeightMask", height_mask)
+		cv2.waitKey(1)
 		return	
 
 def main():

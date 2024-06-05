@@ -45,9 +45,11 @@ ultralytics
 SpeechRecognition
 gtts
 scikit-learn
+py-flags
 
 	* ffmpeg
 	* tf_transformations
+	
 # Diagram
 
 ![state diagram](diagram.png)

@@ -51,6 +51,7 @@ install(PROGRAMS
   scripts/qr_codes.py
   scripts/face_detection.py
   scripts/park_pos_detection.py
+  scripts/face_extractor.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY

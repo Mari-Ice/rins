@@ -36,7 +36,6 @@ amcl_pose_qos = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-
 #	Kamera naj bo v looking_for_rings polozaju.
 #	Zaznat je treba camera clipping, ker takrat zadeve ne delajo prav. 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import face_extractor
 import math
 import random
 import time
@@ -7,10 +8,12 @@ import rclpy
 from rclpy.node import Node
 import cv2
 import numpy as np
-import tf2_ros
 import os
+import tf2_geometry_msgs as tfg
+from cv_bridge import CvBridge, CvBridgeError
 
 from enum import Enum
+from flags import Flags
 from cv_bridge import CvBridge, CvBridgeError
 
 from std_msgs.msg import ColorRGBA
@@ -24,17 +27,21 @@ from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
+from lifecycle_msgs.srv import GetState
 
+import message_filters
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
+from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion, PoseWithCovarianceStamped
+from geometry_msgs.msg import Twist
 from visualization_msgs.msg import Marker, MarkerArray
-from task3.msg import RingInfo, Waypoint, AnomalyInfo
+from task3.msg import RingInfo, Waypoint, FaceInfo
 from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
-
-MIN_DETECTED_RINGS = 4
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 qos_profile = QoSProfile(
 		  durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -42,184 +49,391 @@ qos_profile = QoSProfile(
 		  history=QoSHistoryPolicy.KEEP_LAST,
 		  depth=1)
 
-"""
-	Vsi nodi publish-ajo svoje podatke, skupaj z neko kvaliteto podatkov
-"""
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
 
-class MasterState(Enum):
-	INIT = 0
-	CAMERA_SETUP_FOR_EXPLORATION = 1
-	EXPLORING = 2
-	MOVING_TO_PERSON = 3
-	TALKING_TO_PERSON = 4
-	VALIDATING_RING = 5
-	CHECKING_INFO = 6
-	MOVING_TO_RING_FOR_PARKING = 7
-	CAMERA_SETUP_FOR_PARKING = 8
-	PARKING = 9
-	FINDING_CYLINDER = 10
-	MOVING_TO_CYLINDER = 11
-	CAMERA_SETUP_FOR_QR = 12
-	READING_QR = 13
-	DISPLAYING_PHOTO_FROM_QR = 14
-	CAMERA_SETUP_FOR_PAINTINGS = 15
-	SEARCHING_FOR_PAINTINGS = 16
-	MOVING_TO_PAINTING = 17
-	DETECTING_ANOMALIES = 18
-	MOVING_TO_GENUINE_PAINTING = 19
-	DONE = 20
-
-def create_marker_point(position, color=[1.,0.,0.], size=0.1):
+def create_point_marker(point, header):
 	marker = Marker()
+	marker.header = header
+
 	marker.type = 2
-	marker.scale.x = size
-	marker.scale.y = size
-	marker.scale.z = size
-	marker.color.r = float(color[0])
-	marker.color.g = float(color[1])
-	marker.color.b = float(color[2])
+
+	marker.scale.x = 0.1
+	marker.scale.y = 0.1
+	marker.scale.z = 0.1
+
+	marker.color.r = 1.0
+	marker.color.g = 1.0
+	marker.color.b = 1.0
 	marker.color.a = 1.0
-	marker.pose.position.x = float(position[0])
-	marker.pose.position.y = float(position[1])
-	marker.pose.position.z = float(position[2])
+	marker.pose.position = array2point(point)
+	
 	return marker
 
-def argmin(arr, normal_fcn, params):
-	c_min = 100001
-	c_min_index = -1
-	for i, e in enumerate(arr):
-		dist = normal_fcn(e, params)
-		if(dist < c_min):
-			c_min = dist
-			c_min_index = i
-	return [c_min, c_min_index]
-
-def ring_dist_normal_fcn(ring_elt, new_ring):
-	return np.linalg.norm(np.array(ring_elt[0].position) - np.array(new_ring.position))
-
+def clamp(x, minx, maxx):
+	return min(max(x, minx), maxx)
+def deg2rad(deg):
+	return (deg/180.0) * math.pi
+def pos_angle(rad):
+	while(rad > 2*math.pi):
+		rad -= 2*math.pi
+	while(rad < 0):
+		rad += 2*math.pi
+	return rad
 def millis():
 	return round(time.time() * 1000)	
+def sharp_angle(alpha, beta):
+	alpha = pos_angle(alpha)
+	beta = pos_angle(beta)
+	direction = 1
+
+	if(alpha < beta):
+		direction = alpha
+		alpha = beta
+		beta = direction
+		direction = -1
+	
+	if(beta+math.pi >= alpha):
+		return direction * (alpha - beta)
+	return direction * (alpha + beta - 2*math.pi)
+
+class Clusters():
+	class ClusterResult(Flags):
+		FOUND_POTENTIAL	= 1
+		NEW_VALID 		= 2
+		NEW_BEST 		= 4
+		MERGED   		= 8
+
+	def __init__(self, data_position_fcn, data_quality_fcn, quality_threshold, min_cluster_dist):
+		self.data_position_fcn = data_position_fcn
+		self.data_quality_fcn  = data_quality_fcn
+		self.quality_threshold = quality_threshold
+		self.min_cluster_dist  = min_cluster_dist
+		self.data_arr = [] # Oblike [ [data1_best, data1_last], [data2_best, data2_last], ... ]
+
+		return
+
+	@staticmethod
+	def _mag_sq(vec):
+		return np.dot(vec,vec)
+	@staticmethod
+	def _mag(vec):
+		return math.sqrt(Clusters._mag_sq(vec))
+
+	def _closest_cluster_to_data(self, data):
+		result_data_index = -1
+		result_distance = float("Inf")
+
+		ndp = self.data_position_fcn(data)
+		for i, d in enumerate(self.data_arr):
+			dp1 = self.data_position_fcn(d[0])		
+			dp2 = self.data_position_fcn(d[1])		
+			dist1 = Clusters._mag_sq(ndp - dp1)
+			dist2 = Clusters._mag_sq(ndp - dp2)
+			dist = min(dist1, dist2)
+			if(dist < result_distance):
+				result_distance = dist
+				result_data_index = i
+
+		result_distance = math.sqrt(result_distance)
+		return [result_distance, result_data_index]	
+	
+	def _cleanup_potential_clusters(self):
+		for j, d1 in enumerate(self.data_arr):
+			q1 = self.data_quality_fcn(d1[0])
+			if(q1 < self.quality_threshold):
+				continue
+			dp1 = self.data_position_fcn(d1[0])		
+
+			for i, d2 in enumerate(self.data_arr):
+				q2 = self.data_quality_fcn(d2[0])
+				if(q1 >= self.quality_threshold):
+					continue
+				
+				dp2 = self.data_position_fcn(d2[0])		
+				dist = Clusters._mag(dp2-dp1)
+				if(dist < 1.0):
+					self.data_arr.remove(d2)
+		return
+	
+	def _merge_data(self, target_index, data):
+		result = Clusters.ClusterResult.MERGED
+		new_data = [self.data_arr[target_index][0], data]
+
+		new_data_q = self.data_quality_fcn(data)
+		old_data_q = self.data_quality_fcn(new_data[0])
+
+		if(new_data_q > self.quality_threshold and old_data_q <= self.quality_threshold):
+			result |= (Clusters.ClusterResult.NEW_VALID | Clusters.ClusterResult.NEW_BEST)
+		if(new_data_q > old_data_q):
+			new_data = [data, data]
+			result |= Clusters.ClusterResult.NEW_BEST
+				
+		self.data_arr[target_index] = new_data
+		return result
+
+	def add(self, data):
+		status = Clusters.ClusterResult.FOUND_POTENTIAL
+		min_dist, cluster_index = self._closest_cluster_to_data(data)
+
+		if(min_dist > self.min_cluster_dist): 
+			cluster_index = len(self.data_arr)
+			self.data_arr.append([data,data])
+			new_data_q = self.data_quality_fcn(data)
+			if(new_data_q > self.quality_threshold):
+				status |= (Clusters.ClusterResult.NEW_VALID | Clusters.ClusterResult.NEW_BEST)
+		elif(cluster_index >= 0):
+			status |= self._merge_data(cluster_index, data)
+
+		if(bool(status & Clusters.ClusterResult.NEW_BEST)):
+			self._cleanup_potential_clusters()
+
+		return [status, cluster_index]
+	def get_best(self, index):
+		if(index >= len(self.data_arr)):
+			return None
+		return self.data_arr[index][0]
+	def get_last(self, index):
+		if(index >= len(self.data_arr)):
+			return None
+		return self.data_arr[index][1]
+
+
+class Nav2State(Enum):
+	IDLE = 0
+	LONG_IDLE = 1
+	NAVIGATING = 2
+	WAITING_FOR_CANCELLATION = 3
+
+def fdata_position_fcn(fdata):
+	return fdata[1]
+def fdata_quality_fcn(fdata):
+	return float(fdata[0].quality)
 
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
-
-		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
-		self.time = rclpy.time.Time() #T0
 		
-		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
-		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
-
-		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
-		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-
-		self.park_srv = self.create_client(Trigger, '/park_cmd')
-		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
-		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
-		self.priority_keypoint_pub = self.create_publisher(Waypoint, '/priority_keypoint', QoSReliabilityPolicy.BEST_EFFORT)
-
-		self.people_marker_sub = self.create_subscription(Marker, "/people_marker", self.people_callback, qos_profile_sensor_data)
-		self.anomaly_info_sub = self.create_subscription(AnomalyInfo, "/anomaly_info", self.anomaly_callback, qos_profile_sensor_data)
-
-		self.color_talker_srv = self.create_client(Color, '/say_color')
-		self.greet_srv = self.create_client(Trigger, '/say_hello')
-
-		self.exploration_active = False
-		self.green_ring_position = [0,0]
-		self.green_ring_found = False
-		self.ring_count = 0	
-		self.rings = []
-		# added people management (monas can count as people? what is better) TODO
-		self.people_count = 0
-		self.people = []
-
-		self.timer = self.create_timer(0.1, self.on_update)
-		self.ring_quality_threshold = 0.3
-		self.t1 = millis()
-		self.state = MasterState.INIT
-		self.change_state(MasterState.INIT)
-
-		self.ros_occupancy_grid = None
 		self.map_np = None
 		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
 		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
+		self.park_search_circle_size = 10
 
 		pwd = os.getcwd()
-		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
-		self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
+		self.gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
+		self.costmap = cv2.cvtColor(cv2.imread(f"{self.gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
+
+		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 20)
+
+		self.tf_buffer   = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
+		
+		self.goal_handle_inited = False
+		self.goal_handle = None
+
+		self.nav2_has_goal_pending = False
+		self.nav2_current_goal = None
+		self.nav2state = Nav2State.IDLE
+		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+		self.initial_pose_received = False
+		self.position = None
+		self.rotation = None
+		self.yaw = 0
+		self.localization_pose_sub = self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._amclPoseCallback, qos_profile)
+
+		t0 = millis()
+
+		self.waitUntilNav2Active()
+		self.nav2timer = self.create_timer(1/10, self.nav2_timer_loop)
+		self.nav2_t1 = millis()
+
+		while(millis() - t0 < 7000):
+			time.sleep(0.1)
+
+		# Face sub
+		self.update_timer = self.create_timer(1/10, self.update)
+		self.face_sub = self.create_subscription(FaceInfo, "/face_info", self.face_callback, qos_profile_sensor_data)
+		self.face_clusters = Clusters(fdata_position_fcn, fdata_quality_fcn, 0.1, 0.5)
+		self.visited = []
+
+		# Rotate to target
+		self.rotate2target_t2 = millis()
+		
+		#To zamenjas potem z state machinom...
+		self.face_index = -1
+		self.navigating_to_face = False
+		self.state = 0 
+		self.rotate_error_fcn_list = [self.yaw_img_error, self.yaw_acml_error]
+
+		self.bridge = CvBridge()
+		self.img = None
+		self.mona_imgs = []
+
+		self.rgb_image_sub = message_filters.Subscriber(self, Image, "/oakd/rgb/preview/image_raw")
+		self.ts = message_filters.ApproximateTimeSynchronizer( [self.rgb_image_sub], 10, 0.05, allow_headerless=False) 
+		self.ts.registerCallback(self.rgb_callback)
+
+		# PCA stuff
+		self.fe = face_extractor.face_extractor()
 
 		print("OK")
 		return
 
-	def clock_callback(self, msg):
-		self.time = msg.clock
+	def rgb_callback(self, rgb_data):
+		self.img = self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
+
+	def yaw_acml_error(self):
+		return -sharp_angle(self.yaw + math.pi/2, self.nav2_current_goal[1])
+	def yaw_img_error(self):
+		fdata = self.face_clusters.get_last(self.face_index)	
+
+		if(millis() - fdata[3] > 1000):
+			return None
+		return fdata[0].yaw_relative
+
+	def update(self): # To tudi potem postane del state machina
+		if(self.nav2state == Nav2State.LONG_IDLE and self.navigating_to_face):
+			self.visited.append(self.face_index)
+			self.navigating_to_face = False
+			self.state = 1
+		if(self.state == 1):
+			if(self.rotate_to_target_loop(self.rotate_error_fcn_list)):
+				self.state = 2
+		if(self.state == 2):
+			if(self.move_closer_to_img()):
+				self.state = 3
+		if(self.state == 3):
+			self.mona_imgs = []
+			self.mona_imgs.append(self.img)
+			self.state = 4
+		if(self.state == 4):
+			fdata = self.face_clusters.get_last(self.face_index)	
+			result = self.fe.find_anomalies(self.mona_imgs[0], np.array(fdata[0].img_bounds_xyxy))
+			#print(result.shape)
+			self.state = 0
+
+		return 
+
+	def goal_accepted_callback(self, future):
+		if self.goal_handle_inited and not self.goal_handle.accepted:
+			self.nav2state = Nav2State.IDLE
+			self.nav2_t1 = millis()
+			self.get_logger().error('Goal was rejected!')
+			return	
+
+		self.goal_handle = future.result()
+		self.goal_handle_inited = True
+
+		self.result_future = self.goal_handle.get_result_async()
+		self.result_future.add_done_callback(self.get_result_callback)
 		return
 
-	def create_nav2_goal_msg(self, x,y):
-		goal_pose = PoseStamped()
-		goal_pose.header.frame_id = 'map'
-		goal_pose.header.stamp = self.time
-		goal_pose.pose.position.x = float(x)
-		goal_pose.pose.position.y = float(y)
-		goal_pose.pose.orientation = Quaternion(x=0.,y=0.,z=0.,w=1.)
-		return goal_pose
+	def get_result_callback(self, future):
+		status = future.result().status
+		self.nav2state = Nav2State.IDLE
+		self.nav2_t1 = millis()
+		
+		# if(status == GoalStatus.STATUS_CANCELED):
+		# 	pass	
+		# elif(status != GoalStatus.STATUS_SUCCEEDED):
+		# 	# self.get_logger().info(f'Goal failed with status code: {status}')
+		return
 
-	def go_to_pose(self, x,y): #nav2
-		pose = self.create_nav2_goal_msg(x,y)
+	def stop_nav2(self):
+		if(self.nav2state != Nav2State.NAVIGATING):
+			return
 
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
 
-		goal_msg = NavigateToPose.Goal()
-		goal_msg.pose = pose
-		goal_msg.behavior_tree = ""
-		self.send_goal_future = self.nav_to_pose_client.send_goal_async(goal_msg)
-		self.send_goal_future.add_done_callback(self.goal_accepted_callback)
+		if(self.goal_handle_inited):
+			self.nav_to_pose_client._cancel_goal_async(self.goal_handle)
+			self.nav2state = Nav2State.WAITING_FOR_CANCELLATION
 		return
-	
-	def goal_accepted_callback(self, future):
-		goal_handle = future.result()
-		if not goal_handle.accepted:
-			self.get_logger().error('Goal was rejected!')
-			return	
-		self.result_future = goal_handle.get_result_async()
-		self.result_future.add_done_callback(self.get_result_callback)
-		return
-	
-	def get_result_callback(self, future):
-		status = future.result().status
-		if status != GoalStatus.STATUS_SUCCEEDED:
-			print(f'Goal failed with status code: {status}')
+
+	def nav2_timer_loop(self):
+		# print("nav2state: ", self.nav2state)
+		if(self.nav2state == Nav2State.IDLE and millis() - self.nav2_t1 > 1400):
+			self.nav2state = Nav2State.LONG_IDLE
+
+		if(self.nav2state == Nav2State.WAITING_FOR_CANCELLATION):
+			return
+		if(self.nav2_has_goal_pending):	
+			self.nav2_has_goal_pending = False
+			self.nav2state = Nav2State.NAVIGATING
+			
+			pos_yaw = self.nav2_current_goal
+			pose = PoseStamped()
+			pose.header.frame_id = 'map'
+			pose.header.stamp = self.get_clock().now().to_msg()
+			pose.pose.position.x = float(pos_yaw[0][0])
+			pose.pose.position.y = float(pos_yaw[0][1])
+			quat_tf = quaternion_from_euler(0, 0, pos_yaw[1])
+			quat_msg = Quaternion(x=quat_tf[0], y=quat_tf[1], z=quat_tf[2], w=quat_tf[3]) # for tf_turtle
+			pose.pose.orientation = quat_msg
+
+			while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+				self.get_logger().info("'NavigateToPose' action server not available, waiting...")
+			goal_msg = NavigateToPose.Goal()
+			goal_msg.pose = pose
+			goal_msg.behavior_tree = ""
+			send_goal_future = self.nav_to_pose_client.send_goal_async(goal_msg)
+			send_goal_future.add_done_callback(self.goal_accepted_callback)
+		return	
+
+	def nav2_goto(self, position, yaw):
+		fx, fy = self.get_valid_close_position(position[0], position[1])
+		position = np.array([fx,fy])
+
+		if(self.nav2state == Nav2State.NAVIGATING):
+			#najprej preverimo ali je goal sploh razlicen lel.
+			if(self.nav2_current_goal != None):
+				if(np.linalg.norm(position - self.nav2_current_goal[0]) < 0.05 and abs(sharp_angle(yaw, self.nav2_current_goal[1])) < 0.035):
+					return #prakticno isti goal
+			self.stop_nav2()
 		else:
-			print(f'Goal reached (according to Nav2).')
-		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
-		return
+			self.nav2state == Nav2State.NAVIGATING
+		
+		self.nav2_current_goal = [position, yaw]
+		self.nav2_has_goal_pending = True
 
-	def people_callback(self, marker):
-		# TODO add person marker to list and determine if it is monalisa
-		pass
-
-	def anomaly_callback(self, anomaly):
-		# TODO: add monalisa to list and by quality determine if it is true monalisa
-		pass	
+	def transform_point(self, point, from_link, to_link):
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=0.5)
+		trans = self.tf_buffer.lookup_transform(to_link, from_link, time_now, timeout)	
+		
+		p = PointStamped() 
+		p.header.frame_id = "/map"
+		p.header.stamp = time_now.to_msg()
+		p.point.x = float(point[0])
+		p.point.y = float(point[1])
+		p.point.z = float(point[2])
+		p_global = tfg.do_transform_point(p, trans)
 	
-	def change_state(self, state):
-		old_state = self.state
-		self.state = state
-		print(f"state -> {MasterState(state).name}")
+		return np.array([p_global.point.x, p_global.point.y, p_global.point.z])
 
-		self.on_state_change(old_state, state)
-		return
-	
-	def on_state_change(self, old_state, new_state):
-		m_time = millis()
-		if(old_state == MasterState.MOVING_TO_RING_FOR_PARKING):
-			self.setup_camera_for_parking()
-			self.t1 = m_time
-		if(new_state == MasterState.PARKING):
-			self.start_parking()
-		if(new_state == MasterState.EXPLORING):
-			self.enable_exploration()
+	def face_callback(self, finfo):
+
+		global_position = self.transform_point(np.array(finfo.position_relative), "oakd_link", "map")
+		global_normal  = self.transform_point((np.array(finfo.position_relative) + np.array(finfo.normal_relative)), "oakd_link", "map") - global_position
+
+		fdata = [finfo, global_position, global_normal, millis()]	 
+		status, index = self.face_clusters.add(fdata)
+
+		if(self.state != 0 or self.navigating_to_face):
+			return
+
+		if(not index in self.visited):
+			# print(f"Face cluster status: {status}")
+			if(status & Clusters.ClusterResult.NEW_BEST):
+				self.nav2_goto(global_position + 0.3 * global_normal, -math.atan2(global_normal[0], global_normal[1]))
+				self.navigating_to_face = True
+				self.face_index = index
+
 		return
 
 	def map_pixel_to_world(self, x, y, theta=0):
@@ -253,8 +467,55 @@ class MasterNode(Node):
 								 euler_from_quaternion(quat_list)[-1]]
 		return
 
+	def waitUntilNav2Active(self, navigator='bt_navigator', localizer='amcl'):
+		"""Block until the full navigation system is up and running."""
+		self._waitForNodeToActivate(localizer)
+		if not self.initial_pose_received:
+			time.sleep(1)
+		self._waitForNodeToActivate(navigator)
+		print('Nav2 is ready for use!')
+		return
+
+	def _waitForNodeToActivate(self, node_name):
+		# Waits for the node within the tester namespace to become active
+		print(f'Waiting for {node_name} to become active..')
+		node_service = f'{node_name}/get_state'
+		state_client = self.create_client(GetState, node_service)
+		while not state_client.wait_for_service(timeout_sec=1.0):
+			print(f'{node_service} service not available, waiting...')
+
+		req = GetState.Request()
+		state = 'unknown'
+		while state != 'active':
+			print(f'Getting {node_name} state...')
+			future = state_client.call_async(req)
+			rclpy.spin_until_future_complete(self, future)
+			if future.result() is not None:
+				state = future.result().current_state.label
+				print(f'Result of get_state: {state}')
+			time.sleep(2)
+		return
+
+	def _amclPoseCallback(self, msg):
+		self.initial_pose_received = True
+		#self.current_pose = msg.pose
+		p = msg.pose.pose.position
+		self.position = np.array([p.x, p.y, p.z])
+		self.rotation = msg.pose.pose.orientation
+
+		q = self.rotation
+		#yaw = math.atan2(2.0*(q.y*q.z + q.w*q.x), q.w*q.w - q.x*q.x - q.y*q.y + q.z*q.z)
+		#yaw = math.asin(-2.0*(q.x*q.z - q.w*q.y))
+		yaw = math.atan2(2.0*(q.x*q.y + q.w*q.z), q.w*q.w + q.x*q.x - q.y*q.y - q.z*q.z)
+		self.yaw = yaw
+
+		return
+
 	def get_valid_close_position(self, ox,oy):
-		mx,my = self.world_to_map_pixel(ox,oy)
+		try:
+			mx,my = self.world_to_map_pixel(ox,oy)
+		except:	
+			return [ox,oy]
 
 		height, width = self.costmap.shape[:2]
 		pixel_locations = np.full((height, width, 2), 0, dtype=np.uint16)
@@ -263,190 +524,63 @@ class MasterNode(Node):
 				pixel_locations[y][x] = [x,y]
 
 		mask1 = np.full((height, width), 0, dtype=np.uint8)
-		cv2.circle(mask1,(mx,my),10,255,-1)
+		cv2.circle(mask1,(mx,my),self.park_search_circle_size,255,-1)
 		mask1[self.costmap < 200] = 0
-		pts = pixel_locations[mask1==255]
+		pts = np.array(pixel_locations[mask1==255])
 		if(len(pts) > 0):
-			center = random.choice(pts)
+			#Find closest to ox,oy
+			norms = np.linalg.norm((pts - np.array([mx,my])), axis=1)
+			index_of_smallest_norm = np.argmin(norms)
+			center = pts[index_of_smallest_norm]
 			return self.map_pixel_to_world(center[0], center[1])
 		else:
 			return [ox,oy]
 
-	def on_update(self):
-		self.send_ring_markers()
+	def rotate_to_target_loop(self, error_fcn_list):
+		error = None
+		for err_fcn in error_fcn_list:
+			e = err_fcn()
+			if(e != None):
+				error = e
+				break
+		if(error == None): #V tem primeru se lahko npr vrtis 
+			cmd_msg = Twist()
+			cmd_msg.angular.z = 1.8
+			cmd_msg.linear.x = 0.
+			self.teleop_pub.publish(cmd_msg)
+			return False
 		
-		m_time = millis()
-		if(self.state == MasterState.INIT):
-			if((m_time - self.t1) > 3000): #Wait for n_s na zacetku,da se zadeve inicializirajo...
-				self.setup_camera_for_ring_detection()
-				self.change_state(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
-				self.t1 = m_time
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
-			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			#zaenkrat samo cakamo n_s
-			if((m_time - self.t1) > 4000):
-				self.change_state(MasterState.EXPLORING)
-				self.t1 = m_time
-		elif(self.state == MasterState.EXPLORING):
-			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
-				if((m_time - self.t1) > 2000):
-					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
-					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
-					self.go_to_pose(fixed_x, fixed_y) 
-					self.change_state(MasterState.MOVING_TO_RING_FOR_PARKING)
-				else:
-					self.disable_exploration()
-			else:
-				self.t1 = m_time
+		# print(f"Rotate error: {error}")
 
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
-			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
-			#zaenkrat samo cakamo 3s
-			if((m_time - self.t1) > 3000):
-				self.change_state(MasterState.PARKING)
-				self.t1 = m_time
-		return
+		if(abs(error) > deg2rad(4)):
+			self.rotate2target_t2 = millis()
 
-	def found_new_ring(self, ring_info):
-		self.ring_count += 1
+		if(millis() - self.rotate2target_t2 > 2000):
+			return True
 
-		color_names = ["red", "green", "blue", "black"]
-		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
-		self.say_color(ring_info.color_index)
-
-		if(ring_info.color_index == 1): #nasli smo zelen ring
-			if(self.green_ring_found): #okej dva zelena wtf
-				pass #TODO
-			else:
-				self.green_ring_found = True
-				self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
-		return
-
-	def send_ring_markers(self):
-		ma = MarkerArray()
-
-		for i, r in enumerate(self.rings):
-			marker = None
-			
-			if(r[0].q > self.ring_quality_threshold):
-				marker = create_marker_point(r[0].position, r[0].color)
-				marker.id = i
-			else:
-				marker = create_marker_point(r[0].position, [0.8,0.8,0.8])
-				marker.id = 100+i
-			
-			marker.header.frame_id = "/map"
-			marker.lifetime = Duration(seconds=.2).to_msg()
-			ma.markers.append(marker)
+		kp = 1.0
 		
-		self.ring_markers_pub.publish(ma)	
-		self.cleanup_potential_rings()
-		return
+		vel = error * kp
+		cmd_msg = Twist()
+		cmd_msg.angular.z = vel
+		cmd_msg.linear.x = 0.
+		self.teleop_pub.publish(cmd_msg)
+		return False	
 
-	def setup_camera_for_ring_detection(self):
-		msg = String()
-		msg.data = "look_for_rings"
-		self.arm_pos_pub.publish(msg)
-		return
+	def move_closer_to_img(self):
+		print("Moving closer")
+		fdata = self.face_clusters.get_last(self.face_index)	
+		error = min(465 - fdata[0].img_bounds_xyxy[3], fdata[0].img_bounds_xyxy[1] - 85)
+		if(error < 0):
+			return True
+	
+		print("Move err: ", error)
+		cmd_msg = Twist()
+		cmd_msg.angular.z = 0.
+		cmd_msg.linear.x = error * 0.001 + 0.01
+		self.teleop_pub.publish(cmd_msg)
+		return False
 
-	def setup_camera_for_parking(self):
-		msg = String()
-		msg.data = "look_for_parking2"
-		self.arm_pos_pub.publish(msg)
-		return
-
-	def start_parking(self):
-		req = Trigger.Request()
-		self.park_srv.call_async(req)
-		return
-
-	def enable_exploration(self):
-		if(not self.exploration_active):
-			req = Trigger.Request()
-			self.enable_exploration_srv.call_async(req)
-			self.exploration_active = True
-		return 
-
-	def disable_exploration(self):
-		if(self.exploration_active):
-			req = Trigger.Request()
-			self.disable_exploration_srv.call_async(req)
-			self.exploration_active = False
-		return
-
-	def say_color(self, color_index):
-		req = Color.Request()
-		req.color = color_index
-		self.color_talker_srv.call_async(req)
-		return
-
-	#TODO: to se da implementirat dosti lepse in hitrejse, ...
-	#TODO: na potencialne tocke bi lahko dali tud nek timeout, po katerm joh brisemo...
-	def cleanup_potential_rings(self): 
-		for j, fi in enumerate(self.rings):
-			if(fi[0].q < self.ring_quality_threshold):
-				continue
-
-			for i,ri in enumerate(self.rings):
-				if(ri[0].q >= self.ring_quality_threshold):
-					continue
-				
-				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
-				if(dist < 1.0):
-					self.rings.remove(ri)
-		return
-
-	def add_new_ring(self, ring_info):
-		self.rings.append([ring_info, ring_info])
-		self.cleanup_potential_rings()
-		if(ring_info.q > self.ring_quality_threshold):
-			self.found_new_ring(ring_info)
-		else: #Pojdi od blizje pogledat. (Priority Keypoint)
-			rx, ry = self.get_valid_close_position(ring_info.position[0], ring_info.position[1])
-			if(rx == ring_info.position[0] and ry == ring_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
-				return
-
-			wp = Waypoint()
-			wp.x = rx
-			wp.y = ry
-			wp.yaw = 0. #TODO, theta.
-
-			#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,... #TODO to bi se lahko lepse v autonom. nodu naredlo
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi/2 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = 3*math.pi/2
-			self.priority_keypoint_pub.publish(wp)
-			
-		return
-
-	def merge_ring_with_target(self, target_index, ring):
-		result = [self.rings[target_index][0], ring]
-		if(ring.q > self.ring_quality_threshold and result[0].q <= self.ring_quality_threshold):
-			self.found_new_ring(ring)
-		if(ring.q > result[0].q):
-			result = [ring, ring]
-			if(ring.color_index == 1 and ring.q > self.ring_quality_threshold): #Zelen, izboljsas... TODO
-				self.green_ring_position = ring.position
-				
-		self.rings[target_index] = result
-		return
-		
-	def ring_callback(self, ring_info):
-		if(self.state != MasterState.EXPLORING):
-			return
-
-		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
-		#ring_info.color_index = (ring_info.color_index + 1) % 4
-
-		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
-		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
-			self.add_new_ring(ring_info)	
-		else:
-			self.merge_ring_with_target(min_index, ring_info)
-		return
 
 def main():
 	rclpy.init(args=None)
