@@ -16,7 +16,7 @@ from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import ColorRGBA
 from std_msgs.msg import String
 
-from geometry_msgs.msg import PointStamped, Point
+from geometry_msgs.msg import PointStamped, Point, Twist
 import tf2_geometry_msgs as tfg
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
@@ -153,6 +153,7 @@ class MasterNode(Node):
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
+		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
 		self.park_srv = self.create_client(Trigger, '/park_cmd')
 		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
@@ -224,20 +225,10 @@ class MasterNode(Node):
 		return [pp_global.point.x, pp_global.point.y, pp_global.point.z]
 
 	def rotate_on_point(self, x, y):
-		wp = Waypoint()
-		wp.x = x
-		wp.y = y
-		wp.yaw = 0. 
-
-		#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,...
-		self.priority_keypoint_pub.publish(wp)
-		wp.yaw = math.pi/2 
-		self.priority_keypoint_pub.publish(wp)
-		wp.yaw = math.pi 
-		self.priority_keypoint_pub.publish(wp)
-		wp.yaw = 3*math.pi/2
-		self.priority_keypoint_pub.publish(wp)
-		return
+		cmd_msg = Twist()
+		cmd_msg.linear.x = 0.
+		cmd_msg.angular.z = 1.8
+		self.teleop_pub.publish(cmd_msg)
 	
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
@@ -287,6 +278,8 @@ class MasterNode(Node):
 			self.sm.stop()
 		elif(self.sm.moving_to_person.is_active):
 			self.sm.talk_to_person()
+		elif(self.sm.moving_to_cylinder.is_active):
+			self.sm.setup_camera_for_qr()
 		else:
 			raise ValueError("Unknown state")
 		return
@@ -379,6 +372,10 @@ class MasterNode(Node):
 			#zaenkrat samo cakamo 3s
 			if((m_time - self.t1) > 3000):
 				self.sm.park()
+
+		elif(self.sm.camera_setup_for_cylinder.is_active):
+			if((m_time - self.t1) > 3000):
+				self.sm.find_cylinder()
     
 		elif(self.sm.camera_setup_for_qr.is_active):
 			if((m_time - self.t1) > 3000):
@@ -388,6 +385,14 @@ class MasterNode(Node):
 			# TODO: wait until qur code is actually read
 			if((m_time - self.t1) > 3000):
 				self.sm.setup_camera_for_exploration()
+
+		elif(self.sm.finding_cylinder.is_active):
+			self.rotate_on_point(None, None)
+			if(self.cylinder_position):
+				print("found at least one cylinder")
+				if(self.last_cylinder_dist < 2.):
+					print("Going to cylinder")
+					self.sm.move_to_cylinder()
     
 		elif(self.sm.searching_for_paintings.is_active):
 			if(self.found_all_mona_lisas()):
@@ -504,7 +509,7 @@ class MasterNode(Node):
 
 	# TODO: call this when parking finishes
 	def parking_ended(self):
-		self.sm.find_cylinder()
+		self.sm.setup_camera_for_cylinder()
 		return
 
 	def find_cylinder(self):
@@ -514,13 +519,7 @@ class MasterNode(Node):
 		self.last_cylinder_dist = None
 
 		pose = self.relative_to_global([0, 0, 0])
-		self.rotate(pose[0], pose[1])
-
-		if(self.cylinder_position):
-			print("found at least one cylinder")
-			if(self.last_cylinder_dist < 2.):
-				print("Going to cylinder")
-				self.sm.move_to_cylinder()
+		self.rotate_on_point(pose[0], pose[1])
 
 	def start_qr_reading(self):
 		self.read_qr_srv.call_async(Trigger.Request())
@@ -779,6 +778,9 @@ class MasterStateMachine(StateMachine):
   
 	def on_setup_camera_for_qr(self):
 		self.node.setup_camera_for_qr()
+
+	def on_setup_camera_for_cylinder(self):
+		self.node.setup_camera_for_ring_detection()
   
 	def on_enter_parking(self):
 		self.node.start_parking()
