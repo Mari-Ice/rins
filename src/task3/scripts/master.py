@@ -144,6 +144,7 @@ class MasterNode(Node):
 
 		self.potential_parking_spots = None
 		self.park_sub = self.create_subscription(Park, '/park_near_obj', self.parking_info_callback, QoSReliabilityPolicy.BEST_EFFORT)
+		self.parking_stopped_sub = self.create_subscription(String, '/parking_stopped', self.parking_stopped_callback, QoSReliabilityPolicy.BEST_EFFORT)
 
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
@@ -523,13 +524,12 @@ class MasterNode(Node):
 
 	def start_qr_reading(self):
 		self.read_qr_srv.call_async(Trigger.Request())
-		self.qr_code_read = True # TODO: actually check if qr code is read
+		self.qr_code_read = True # TODO: call qr_reading_ended when qr reading finishes instead
 
 
  	# TODO: call this when qr reading finishes
 	def qr_reading_ended(self):
 		self.qr_code_read = True
-		self.sm.setup_camera_for_exploration()
 		return
 
 	def enable_exploration(self):
@@ -706,6 +706,9 @@ class MasterNode(Node):
 			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative)
 			self.cylinder_position = cylinder_info.position
 			self.last_cylinder_dist = np.linalg.norm(cylinder_info.position_relative)
+
+	def parking_stopped_callback(self, msg):
+		self.parking_ended()
 		
 			
 
