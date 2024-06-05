@@ -89,6 +89,7 @@ class Talker(Node):
 				try:
 					print("Recognizing...")
 					text = self.recogniser.recognize_google(audio)
+					text = text.lower()
 					print("[GOOGLE]: " + text)
 					understood = True
 					response.message = self.process_text(text, response)
