@@ -1,2 +1,1 @@
-string color
-string obj
+string[] colors

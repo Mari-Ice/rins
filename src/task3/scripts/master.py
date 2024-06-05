@@ -16,6 +16,12 @@ from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import ColorRGBA
 from std_msgs.msg import String
 
+from geometry_msgs.msg import PointStamped, Point, Twist
+import tf2_geometry_msgs as tfg
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
@@ -29,10 +35,13 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3, Pose, PoseStamped, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
-from task3.msg import RingInfo, Waypoint, AnomalyInfo
+from task3.msg import RingInfo, Waypoint, AnomalyInfo, FaceInfo, Park, CylinderInfo
 from task3.srv import Color
 from std_srvs.srv import Trigger
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
+
+from statemachine import State
+from statemachine import StateMachine
 
 MIN_DETECTED_RINGS = 4
 
@@ -57,17 +66,18 @@ class MasterState(Enum):
 	MOVING_TO_RING_FOR_PARKING = 7
 	CAMERA_SETUP_FOR_PARKING = 8
 	PARKING = 9
-	FINDING_CYLINDER = 10
-	MOVING_TO_CYLINDER = 11
-	CAMERA_SETUP_FOR_QR = 12
-	READING_QR = 13
-	DISPLAYING_PHOTO_FROM_QR = 14
-	CAMERA_SETUP_FOR_PAINTINGS = 15
-	SEARCHING_FOR_PAINTINGS = 16
-	MOVING_TO_PAINTING = 17
-	DETECTING_ANOMALIES = 18
-	MOVING_TO_GENUINE_PAINTING = 19
-	DONE = 20
+	CAMERA_SETUP_FOR_CYLINDER = 10
+	FINDING_CYLINDER = 11
+	MOVING_TO_CYLINDER = 12
+	CAMERA_SETUP_FOR_QR = 13
+	READING_QR = 14
+	DISPLAYING_PHOTO_FROM_QR = 15
+	CAMERA_SETUP_FOR_PAINTINGS = 16
+	SEARCHING_FOR_PAINTINGS = 17
+	MOVING_TO_PAINTING = 18
+	DETECTING_ANOMALIES = 19
+	MOVING_TO_GENUINE_PAINTING = 20
+	DONE = 21
 
 def create_marker_point(position, color=[1.,0.,0.], size=0.1):
 	marker = Marker()
@@ -94,50 +104,97 @@ def argmin(arr, normal_fcn, params):
 			c_min_index = i
 	return [c_min, c_min_index]
 
-def ring_dist_normal_fcn(ring_elt, new_ring):
-	return np.linalg.norm(np.array(ring_elt[0].position) - np.array(new_ring.position))
+def dist_normal_fcn(elt, new):
+	return np.linalg.norm(np.array(elt[0].position) - np.array(new.position))
 
 def millis():
 	return round(time.time() * 1000)	
 
+def array2point(arr):
+	p = Point()
+	p.x = float(arr[0])
+	p.y = float(arr[1])
+	p.z = float(arr[2])
+	return p
+
+def compare_faces(face1, face2):
+	dist1 = np.linalg.norm(face1.origin + face1.normal * 0.25  - face2.origin)
+	dist2 = np.linalg.norm(face2.origin + face2.normal * 0.25  - face1.origin)
+	dist = min(dist1, dist2)
+	
+	cosfi = face1.normal.dot(face2.normal)
+	return (dist < 0.65) and (cosfi > -0.25)
+
+
 class MasterNode(Node):
 	def __init__(self):
 		super().__init__('master_node')
+  
+		self.sm = MasterStateMachine(self)
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 
 		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
 		self.time = rclpy.time.Time() #T0
-		
+
+		self.go_to_person = False
+		self.talk_future = None
+
+		self.go_to_mona = False
+
+		self.potential_parking_spots = None
+		self.park_sub = self.create_subscription(Park, '/park_near_obj', self.parking_info_callback, QoSReliabilityPolicy.BEST_EFFORT)
+		self.parking_stopped_sub = self.create_subscription(String, '/parking_stopped', self.parking_stopped_callback, QoSReliabilityPolicy.BEST_EFFORT)
+
 		self.ring_sub = self.create_subscription(RingInfo, "/ring_info", self.ring_callback, qos_profile_sensor_data)
 		self.ring_markers_pub = self.create_publisher(MarkerArray, "/rings_markers", QoSReliabilityPolicy.BEST_EFFORT)
+		self.cylinder_sub = self.create_subscription(CylinderInfo, "/cylinder_info", self.cylinder_callback, qos_profile_sensor_data)
 
 		self.arm_pos_pub = self.create_publisher(String, "/arm_command", QoSReliabilityPolicy.BEST_EFFORT)
 		self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
 		self.park_srv = self.create_client(Trigger, '/park_cmd')
 		self.enable_exploration_srv = self.create_client(Trigger, '/enable_navigation')
 		self.disable_exploration_srv = self.create_client(Trigger, '/disable_navigation')
 		self.priority_keypoint_pub = self.create_publisher(Waypoint, '/priority_keypoint', QoSReliabilityPolicy.BEST_EFFORT)
 
-		self.people_marker_sub = self.create_subscription(Marker, "/people_marker", self.people_callback, qos_profile_sensor_data)
 		self.anomaly_info_sub = self.create_subscription(AnomalyInfo, "/anomaly_info", self.anomaly_callback, qos_profile_sensor_data)
+		self.face_info_sub = self.create_subscription(FaceInfo, "/face_info", self.people_callback, qos_profile_sensor_data)
 
 		self.color_talker_srv = self.create_client(Color, '/say_color')
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
+		self.read_qr_srv = self.create_client(Trigger, '/read_qr')
+
+		self.last_person_seen = None
+		self.last_mona_seen = None
+
+		self.ring_position = {}
 
 		self.exploration_active = False
-		self.green_ring_position = [0,0]
-		self.green_ring_found = False
+		self.parking_ring_position = [0,0]
+		self.parking_ring_found = False
+		self.cylinder_position = [0,0]
+		self.cylinder_found = False
+		self.genuine_mona_lisa_position = [0,0]
+		self.genuine_mona_lisa_found = False
+		self.qr_code_read = False
 		self.ring_count = 0	
 		self.rings = []
-		# added people management (monas can count as people? what is better) TODO
 		self.people_count = 0
 		self.people = []
+		self.monas_count = 0
+		self.monas = []
+		self.last_cylinder = None
+		self.last_cylinder_dist = None
+		
 
 		self.timer = self.create_timer(0.1, self.on_update)
 		self.ring_quality_threshold = 0.3
+		self.person_quality_threshold = 0.1 # TODO: determine threshold
+		self.cylinder_threshold = 0.1 # TODO: determine threshold
 		self.t1 = millis()
-		self.state = MasterState.INIT
-		self.change_state(MasterState.INIT)
 
 		self.ros_occupancy_grid = None
 		self.map_np = None
@@ -155,6 +212,24 @@ class MasterNode(Node):
 		self.time = msg.clock
 		return
 
+	def relative_to_global(self, relative, link="rplidar_link"):
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=0.5)
+		transform = self.tf_buffer.lookup_transform("map", link, time_now, timeout)	
+
+		position_point = PointStamped() #robot global pos
+		position_point.header.frame_id = "/map"
+		position_point.header.stamp = self.get_clock().now().to_msg()
+		position_point.point = array2point(relative)
+		pp_global = tfg.do_transform_point(position_point, transform)
+		return [pp_global.point.x, pp_global.point.y, pp_global.point.z]
+
+	def rotate_on_point(self, x, y):
+		cmd_msg = Twist()
+		cmd_msg.linear.x = 0.
+		cmd_msg.angular.z = 1.8
+		self.teleop_pub.publish(cmd_msg)
+	
 	def create_nav2_goal_msg(self, x,y):
 		goal_pose = PoseStamped()
 		goal_pose.header.frame_id = 'map'
@@ -165,7 +240,10 @@ class MasterNode(Node):
 		return goal_pose
 
 	def go_to_pose(self, x,y): #nav2
-		pose = self.create_nav2_goal_msg(x,y)
+		fixed_x, fixed_y = self.get_valid_close_position(x, y)
+		print(f"original: {x}, {y} -new-> {fixed_x}, {fixed_y}")
+		
+		pose = self.create_nav2_goal_msg(fixed_x,fixed_y)
 
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
@@ -192,35 +270,23 @@ class MasterNode(Node):
 			print(f'Goal failed with status code: {status}')
 		else:
 			print(f'Goal reached (according to Nav2).')
-		self.change_state(MasterState.CAMERA_SETUP_FOR_PARKING)
+		if(self.sm.moving_to_ring_for_parking.is_active):
+			self.sm.setup_camera_for_parking()
+		elif(self.sm.moving_to_cylinder.is_active):
+			self.sm.setup_camera_for_qr()
+		elif(self.sm.moving_to_genuine_painting.is_active):
+			self.sm.stop()
+		elif(self.sm.moving_to_person.is_active):
+			self.sm.talk_to_person()
+		elif(self.sm.moving_to_cylinder.is_active):
+			self.sm.setup_camera_for_qr()
+		else:
+			raise ValueError("Unknown state")
 		return
-
-	def people_callback(self, marker):
-		# TODO add person marker to list and determine if it is monalisa
-		pass
 
 	def anomaly_callback(self, anomaly):
 		# TODO: add monalisa to list and by quality determine if it is true monalisa
 		pass	
-	
-	def change_state(self, state):
-		old_state = self.state
-		self.state = state
-		print(f"state -> {MasterState(state).name}")
-
-		self.on_state_change(old_state, state)
-		return
-	
-	def on_state_change(self, old_state, new_state):
-		m_time = millis()
-		if(old_state == MasterState.MOVING_TO_RING_FOR_PARKING):
-			self.setup_camera_for_parking()
-			self.t1 = m_time
-		if(new_state == MasterState.PARKING):
-			self.start_parking()
-		if(new_state == MasterState.EXPLORING):
-			self.enable_exploration()
-		return
 
 	def map_pixel_to_world(self, x, y, theta=0):
 		assert not self.map_data["resolution"] is None
@@ -274,38 +340,89 @@ class MasterNode(Node):
 
 	def on_update(self):
 		self.send_ring_markers()
-		
+
 		m_time = millis()
-		if(self.state == MasterState.INIT):
+		if(self.sm.init.is_active):
 			if((m_time - self.t1) > 3000): #Wait for n_s na zacetku,da se zadeve inicializirajo...
-				self.setup_camera_for_ring_detection()
-				self.change_state(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
-				self.t1 = m_time
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_EXPLORATION):
+				self.sm.setup_camera_for_exploration()
+		elif(self.sm.camera_setup_for_exploration.is_active):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo n_s
 			if((m_time - self.t1) > 4000):
-				self.change_state(MasterState.EXPLORING)
-				self.t1 = m_time
-		elif(self.state == MasterState.EXPLORING):
-			if(self.ring_count >= MIN_DETECTED_RINGS and self.green_ring_found):
+				if self.qr_code_read == False:
+					self.sm.explore()
+				else:
+					self.sm.explore_paintings()
+		elif(self.sm.exploring.is_active):
+			if(self.found_all_people()):
 				if((m_time - self.t1) > 2000):
-					fixed_x, fixed_y = self.get_valid_close_position(self.green_ring_position[0], self.green_ring_position[1])
-					print(f"original: {self.green_ring_position[0]}, {self.green_ring_position[1]} -new-> {fixed_x}, {fixed_y}")
-					self.go_to_pose(fixed_x, fixed_y) 
-					self.change_state(MasterState.MOVING_TO_RING_FOR_PARKING)
+					self.sm.move_to_ring_for_parking()
 				else:
 					self.disable_exploration()
-			else:
-				self.t1 = m_time
+			elif(self.go_to_person):
+				if((m_time - self.t1) > 2000):
+					self.sm.move_to_person()
+				else:
+					self.disable_exploration()
+			# else: 
+			# 	self.t1 = m_time
 
-		elif(self.state == MasterState.CAMERA_SETUP_FOR_PARKING):
+		elif(self.sm.camera_setup_for_parking.is_active):
 			#TODO: cakas, dokler ni potrjeno, da je kamera na pravem polozaju, ...
 			#zaenkrat samo cakamo 3s
 			if((m_time - self.t1) > 3000):
-				self.change_state(MasterState.PARKING)
-				self.t1 = m_time
+				self.sm.park()
+
+		elif(self.sm.camera_setup_for_cylinder.is_active):
+			if((m_time - self.t1) > 3000):
+				self.sm.find_cylinder()
+    
+		elif(self.sm.camera_setup_for_qr.is_active):
+			if((m_time - self.t1) > 3000):
+				self.sm.read_qr()
+
+		elif(self.sm.reading_qr.is_active):
+			# TODO: wait until qur code is actually read
+			if((m_time - self.t1) > 3000):
+				self.sm.setup_camera_for_exploration()
+
+		elif(self.sm.finding_cylinder.is_active):
+			self.rotate_on_point(None, None)
+			if(self.cylinder_position):
+				print("found at least one cylinder")
+				if(self.last_cylinder_dist < 2.):
+					print("Going to cylinder")
+					self.sm.move_to_cylinder()
+    
+		elif(self.sm.searching_for_paintings.is_active):
+			if(self.found_all_mona_lisas()):
+				if((m_time - self.t1) > 2000):
+					self.sm.move_to_genuine_painting()
+				else:
+					self.disable_exploration()
+			# else: 
+			# 	self.t1 = m_time
+    
+
 		return
+
+	def found_all_people(self):
+		# TODO: implement (either "all people" or enough data to find parking spot)
+		
+		print(f"Potential Parking Spots: {self.potential_parking_spots}")
+		print(f"Ring Positions: {self.ring_position}")
+
+		# enough data:
+		if self.potential_parking_spots is not None and len(self.potential_parking_spots) == 1:
+			if list(self.potential_parking_spots)[0] in self.ring_position.keys():
+				self.parking_ring_position = self.ring_position[list(self.potential_parking_spots)[0]]
+				self.parking_ring_found = True
+				return True
+		return False
+
+	def found_all_mona_lisas(self):
+		# TODO: implement (either "all mona lisas" or enough data to find genuine painting)
+		pass
 
 	def found_new_ring(self, ring_info):
 		self.ring_count += 1
@@ -314,13 +431,37 @@ class MasterNode(Node):
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
 		self.say_color(ring_info.color_index)
 
-		if(ring_info.color_index == 1): #nasli smo zelen ring
-			if(self.green_ring_found): #okej dva zelena wtf
-				pass #TODO
-			else:
-				self.green_ring_found = True
-				self.green_ring_position = [ring_info.position[0], ring_info.position[1]]
+		self.ring_position[color_names[ring_info.color_index]] = [ring_info.position[0], ring_info.position[1]]
+
 		return
+	
+	def found_new_person(self, face_info):
+		self.people_count += 1
+		print(f"Found new person.")
+		self.last_person_seen = face_info
+		self.go_to_person = True
+
+	def found_new_mona(self, face_info):
+		self.monas_count += 1
+		print(f"Found new mona.")
+		self.last_mona_seen = face_info
+		self.go_to_mona = True
+	
+	
+	def talk_to_person(self):
+		print("Talking to person")
+
+		req = Trigger.Request()
+		self.talk_future  = self.greet_srv.call_async(req)
+		self.talk_future.add_done_callback(self.done_talking)
+		
+
+	def done_talking(self, future):
+		res = future.result()
+
+		print(f"Done talking: {res}")
+
+		self.sm.explore()
 
 	def send_ring_markers(self):
 		ma = MarkerArray()
@@ -329,7 +470,7 @@ class MasterNode(Node):
 			marker = None
 			
 			if(r[0].q > self.ring_quality_threshold):
-				marker = create_marker_point(r[0].position, r[0].color)
+				marker = create_marker_point(r[0].position)
 				marker.id = i
 			else:
 				marker = create_marker_point(r[0].position, [0.8,0.8,0.8])
@@ -355,9 +496,39 @@ class MasterNode(Node):
 		self.arm_pos_pub.publish(msg)
 		return
 
+	def setup_camera_for_qr(self):
+		msg = String()
+		msg.data = "look_for_qr"
+		self.arm_pos_pub.publish(msg)
+		pass
+
 	def start_parking(self):
 		req = Trigger.Request()
 		self.park_srv.call_async(req)
+		return
+
+	# TODO: call this when parking finishes
+	def parking_ended(self):
+		self.sm.setup_camera_for_cylinder()
+		return
+
+	def find_cylinder(self):
+		# TODO: implement (rotate in place, run cylinder detection, once correct cylinder is found call self.sm.move_to_cylinder())
+		print("finding cylinder")
+		self.cylinder_position = None
+		self.last_cylinder_dist = None
+
+		pose = self.relative_to_global([0, 0, 0])
+		self.rotate_on_point(pose[0], pose[1])
+
+	def start_qr_reading(self):
+		self.read_qr_srv.call_async(Trigger.Request())
+		self.qr_code_read = True # TODO: call qr_reading_ended when qr reading finishes instead
+
+
+ 	# TODO: call this when qr reading finishes
+	def qr_reading_ended(self):
+		self.qr_code_read = True
 		return
 
 	def enable_exploration(self):
@@ -375,6 +546,7 @@ class MasterNode(Node):
 		return
 
 	def say_color(self, color_index):
+		print(f"Say color: {color_index}")
 		req = Color.Request()
 		req.color = color_index
 		self.color_talker_srv.call_async(req)
@@ -406,19 +578,7 @@ class MasterNode(Node):
 			if(rx == ring_info.position[0] and ry == ring_info.position[1]): #Ce ni blo najdene pametne tocke ki ni v steni...
 				return
 
-			wp = Waypoint()
-			wp.x = rx
-			wp.y = ry
-			wp.yaw = 0. #TODO, theta.
-
-			#posljem 4x za vsako spremenim samo theta, kar efektivno naredi, da se rebot obrne na mestu,... #TODO to bi se lahko lepse v autonom. nodu naredlo
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi/2 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = math.pi 
-			self.priority_keypoint_pub.publish(wp)
-			wp.yaw = 3*math.pi/2
-			self.priority_keypoint_pub.publish(wp)
+			self.rotate_on_point(rx, ry)
 			
 		return
 
@@ -428,25 +588,239 @@ class MasterNode(Node):
 			self.found_new_ring(ring)
 		if(ring.q > result[0].q):
 			result = [ring, ring]
+			# TODO: ne iščemo zelenega ringa ampak tistega ki nam ga povejo
 			if(ring.color_index == 1 and ring.q > self.ring_quality_threshold): #Zelen, izboljsas... TODO
-				self.green_ring_position = ring.position
+				self.parking_ring_position = ring.position
 				
 		self.rings[target_index] = result
 		return
 		
 	def ring_callback(self, ring_info):
-		if(self.state != MasterState.EXPLORING):
+		if(not self.sm.exploring.is_active):
 			return
 
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
 		#ring_info.color_index = (ring_info.color_index + 1) % 4
 
-		min_dist, min_index = argmin(self.rings, ring_dist_normal_fcn, ring_info)
+		min_dist, min_index = argmin(self.rings, dist_normal_fcn, ring_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
 		else:
 			self.merge_ring_with_target(min_index, ring_info)
 		return
+	
+	def cleanup_potential_people(self): 
+		for j, fi in enumerate(self.people):
+			if(fi[0].quality < self.person_quality_threshold):
+				continue
+
+			for i,ri in enumerate(self.people):
+				if(ri[0].quality >= self.person_quality_threshold):
+					continue
+				
+				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
+				if(dist < 1.0):
+					self.people.remove(ri)
+		return
+	
+	def add_new_person(self, face_info):
+		self.people.append([face_info, face_info])
+		self.cleanup_potential_people()
+		if(face_info.quality > self.person_quality_threshold):
+			self.found_new_person(face_info)
+			
+		return
+
+	def merge_person_with_target(self, target_index, face_info):
+		result = [self.people[target_index][0], face_info]
+		if(face_info.quality > self.person_quality_threshold and result[0].quality <= self.person_quality_threshold):
+			self.found_new_person(face_info)
+		if(face_info.quality > result[0].quality):
+			result = [face_info, face_info]
+				
+		self.people[target_index] = result
+		return
+	
+	def cleanup_potential_monas(self): 
+		for j, fi in enumerate(self.monas):
+			if(fi[0].quality < self.mona_quality_threshold):
+				continue
+
+			for i,ri in enumerate(self.monas):
+				if(ri[0].quality >= self.mona_quality_threshold):
+					continue
+				
+				dist = np.linalg.norm(np.array(ri[0].position) - np.array(fi[0].position))
+				if(dist < 1.0):
+					self.monas.remove(ri)
+		return
+	
+	def add_new_mona(self, face_info):
+		self.monas.append([face_info, face_info])
+		self.cleanup_potential_monas()
+		if(face_info.quality > self.mona_quality_threshold):
+			self.found_new_mona(face_info)
+			
+		return
+
+	def merge_mona_with_target(self, target_index, face_info):
+		result = [self.monas[target_index][0], face_info]
+		if(face_info.quality > self.mona_quality_threshold and result[0].quality <= self.mona_quality_threshold):
+			self.found_new_mona(face_info)
+		if(face_info.quality > result[0].quality):
+			result = [face_info, face_info]
+				
+		self.monas[target_index] = result
+		return
+	
+	def people_callback(self, face_info : FaceInfo):
+		# TODO: only go to non-mona-lisas during exploration and only go to mona-lisas during painting search
+
+		if(not face_info.is_mona and self.sm.exploring.is_active):
+			min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
+			if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
+				self.add_new_person(face_info)	
+			else:
+				self.merge_person_with_target(min_index, face_info)
+			return
+		
+		if(face_info.is_mona and self.sm.searching_for_paintings.is_active):
+			min_dist, min_index = argmin(self.monas, dist_normal_fcn, face_info)
+			if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
+				self.add_new_mona(face_info)	
+			else:
+				self.merge_mona_with_target(min_index, face_info)
+			return
+		
+	def parking_info_callback(self, park_info):
+		print(f"Park info: {park_info.colors}")
+		if(self.potential_parking_spots is None):
+			self.potential_parking_spots = set(park_info.colors)
+		else:
+			self.potential_parking_spots = self.potential_parking_spots.intersection(set(park_info.colors))
+
+	
+	def cylinder_callback(self, cylinder_info):
+		if(cylinder_info.quality > self.cylinder_threshold):
+			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative)
+			self.cylinder_position = cylinder_info.position
+			self.last_cylinder_dist = np.linalg.norm(cylinder_info.position_relative)
+
+	def parking_stopped_callback(self, msg):
+		self.parking_ended()
+		
+			
+
+class MasterStateMachine(StateMachine):
+	init = State(MasterState.INIT, initial=True)
+	camera_setup_for_exploration = State(MasterState.CAMERA_SETUP_FOR_EXPLORATION)
+	exploring = State(MasterState.EXPLORING)
+	moving_to_person = State(MasterState.MOVING_TO_PERSON)
+	talking_to_person = State(MasterState.TALKING_TO_PERSON)
+	# validating_ring = State(MasterState.VALIDATING_RING)
+	# checking_info = State(MasterState.CHECKING_INFO)
+	moving_to_ring_for_parking = State(MasterState.MOVING_TO_RING_FOR_PARKING)
+	camera_setup_for_parking = State(MasterState.CAMERA_SETUP_FOR_PARKING)
+	parking = State(MasterState.PARKING)
+	camera_setup_for_cylinder = State(MasterState.CAMERA_SETUP_FOR_CYLINDER)
+	finding_cylinder = State(MasterState.FINDING_CYLINDER)
+	moving_to_cylinder = State(MasterState.MOVING_TO_CYLINDER)
+	camera_setup_for_qr = State(MasterState.CAMERA_SETUP_FOR_QR)
+	reading_qr = State(MasterState.READING_QR)
+	# displaying_photo_from_qr = State(MasterState.DISPLAYING_PHOTO_FROM_QR)
+	# camera_setup_for_paintings = State(MasterState.CAMERA_SETUP_FOR_PAINTINGS)
+	searching_for_paintings = State(MasterState.SEARCHING_FOR_PAINTINGS)
+	# moving_to_painting = State(MasterState.MOVING_TO_PAINTING)
+	# detecting_anomalies = State(MasterState.DETECTING_ANOMALIES)
+	moving_to_genuine_painting = State(MasterState.MOVING_TO_GENUINE_PAINTING)
+	done = State(MasterState.DONE, final=True)
+	
+	setup_camera_for_exploration = init.to(camera_setup_for_exploration) | reading_qr.to(camera_setup_for_exploration)
+	explore = camera_setup_for_exploration.to(exploring) | talking_to_person.to(exploring) # | validating_ring.to(exploring) | checking_info.to(exploring)
+	explore_paintings = camera_setup_for_exploration.to(searching_for_paintings) # | detecting_anomalies.to(searching_for_paintings)
+	
+	move_to_person = exploring.to(moving_to_person)
+	talk_to_person = moving_to_person.to(talking_to_person)
+	
+	# validate_ring = exploring.to(validating_ring)
+	
+	# check_info = talking_to_person.to(checking_info) | validating_ring.to(checking_info)
+	
+	move_to_ring_for_parking = exploring.to(moving_to_ring_for_parking) # checking_info.to(moving_to_ring_for_parking)
+	setup_camera_for_parking = moving_to_ring_for_parking.to(camera_setup_for_parking)
+	park = camera_setup_for_parking.to(parking)
+	setup_camera_for_cylinder = parking.to(camera_setup_for_cylinder)
+	find_cylinder = camera_setup_for_cylinder.to(finding_cylinder)
+	move_to_cylinder = finding_cylinder.to(moving_to_cylinder)
+	setup_camera_for_qr = moving_to_cylinder.to(camera_setup_for_qr)
+	read_qr = camera_setup_for_qr.to(reading_qr)
+	
+	# move_to_painting = searching_for_paintings.to(moving_to_painting)
+	# detect_anomalies = moving_to_painting.to(detecting_anomalies)
+	
+	move_to_genuine_painting = searching_for_paintings.to(moving_to_genuine_painting) # detecting_anomalies.to(moving_to_genuine_painting)
+	stop = moving_to_genuine_painting.to(done)
+	
+	def __init__(self, master_node : MasterNode):
+		super(MasterStateMachine, self).__init__()
+		self.node = master_node
+  
+	def on_transition(self, event, state):
+		print(f"Event: '{event}', previous state: '{state.id}'")
+		self.node.t1 = millis()
+		return "on_transition_return"
+		
+	def on_setup_camera_for_exploration(self):
+		self.node.setup_camera_for_ring_detection()
+
+	def on_setup_camera_for_parking(self):
+		self.node.setup_camera_for_parking()
+  
+	def on_setup_camera_for_qr(self):
+		self.node.setup_camera_for_qr()
+
+	def on_setup_camera_for_cylinder(self):
+		self.node.setup_camera_for_ring_detection()
+  
+	def on_enter_parking(self):
+		self.node.start_parking()
+  
+	def on_find_cylinder(self):
+		self.node.find_cylinder()
+  
+	def on_move_to_cylinder(self):
+		self.node.go_to_pose(self.node.cylinder_position[0], self.node.cylinder_position[1])
+
+	def on_move_to_person(self):
+		# waypoint = self.node.relative_to_world_pos(np.array(self.node.last_person_seen.position_relative) + 0.3 * np.array(self.node.last_person_seen.normal_relative))
+		self.node.go_to_pose(self.node.last_person_seen.position[0], self.node.last_person_seen.position[1])
+
+	def on_exit_talking_to_person(self):
+		self.node.go_to_person = False
+
+	def on_talk_to_person(self):
+		self.node.talk_to_person()
+  
+	def on_read_qr(self):
+		self.node.start_qr_reading()
+  
+	def on_explore(self):
+		self.node.enable_exploration()
+  
+	def on_explore_paintings(self):
+		self.node.enable_exploration()
+  
+	def on_exit_exploring(self):
+		self.node.disable_exploration()
+  
+	def on_exit_searching_for_paintings(self):
+		self.node.disable_exploration()
+  
+	def on_move_to_ring_for_parking(self):
+		self.node.go_to_pose(self.node.parking_ring_position[0], self.node.parking_ring_position[1])
+  
+	def on_move_to_genuine_painting(self):
+		self.node.go_to_pose(self.node.genuine_mona_lisa_position[0], self.node.genuine_mona_lisa_position[1])
 
 def main():
 	rclpy.init(args=None)

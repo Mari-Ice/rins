@@ -87,6 +87,7 @@ class park(Node):
 
 		self.teleop_pub = self.create_publisher(Twist, "cmd_vel", 10)
 		self.cmd_srv = self.create_service(Trigger, '/park_cmd', self.park_cmd_callback)
+		self.stopped_pub = self.create_publisher(String, '/parking_stopped', 10)
 
 		self.pixel_locations = None
 		self.pixel_locations_set = False
@@ -255,6 +256,7 @@ class park(Node):
 					if(abs(error) < 3): #stop driving, parked.
 						cmd_msg.linear.x = 0.
 						self.park_state = ParkState.PARKED
+						self.stopped_pub.publish(String(data="Parked"))
 						print("PARKED")
 					else:
 						cmd_msg.linear.x = output

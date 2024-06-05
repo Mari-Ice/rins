@@ -120,7 +120,8 @@ class RingDetection(Node):
 		])
 
 		self.bridge = CvBridge()
-
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 		self.rgb_sub = message_filters.Subscriber(self, Image,		 "/top_camera/rgb/preview/image_raw")
 		self.pc_sub  = message_filters.Subscriber(self, PointCloud2, "/top_camera/rgb/preview/depth/points")
 		self.depth_sub = message_filters.Subscriber(self, Image,	 "/top_camera/rgb/preview/depth")
@@ -216,11 +217,15 @@ class RingDetection(Node):
 					if(color_max == 0):
 						continue
 
-					color = (color / color_max)
-					hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
-					color_uint = (color*255)
-					color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
-					color_index = int(((hue + 60)%360) / 120)
+					try:
+						color = (color / color_max)
+						hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
+						
+						color_uint = (color*255)
+						color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
+						color_index = int(((hue + 60)%360) / 120)
+					except:
+						continue
 
 				color_names = ["red", "green", "blue", "black"]
 				color_name = color_names[color_index]
@@ -260,11 +265,26 @@ class RingDetection(Node):
 				marker.lifetime = Duration(seconds=.1).to_msg()
 				self.ring_marker_pub.publish(marker)
 
+				# Calculate global position
+				time_now = rclpy.time.Time()
+				timeout = Duration(seconds=0.5)
+				transform = self.tf_buffer.lookup_transform("map", "top_camera_link", time_now, timeout)	
+
+				position_point = PointStamped() #robot global pos
+				position_point.header.frame_id = "/map"
+				position_point.header.stamp = rgb.header.stamp
+				position_point.point.x = float(ring_position[2])
+				position_point.point.y = float(ring_position[0])
+				position_point.point.z = float(ring_position[1])
+				pp_global = tfg.do_transform_point(position_point, transform)
+				
 				msg = RingInfo()
 				msg.color_index = color_index
 				msg.position_relative = [float(ring_position[2]), float(ring_position[0]), float(ring_position[1])]
 				msg.normal_relative = [float(normal[2]), float(normal[0]), float(normal[1])]
 				msg.q = q
+				msg.position = [float(pp_global.point.x), float(pp_global.point.y), float(pp_global.point.z)]
+
 				self.ring_info_pub.publish(msg)
 
 		cv2.imshow("Image", img_display)

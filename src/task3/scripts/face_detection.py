@@ -72,6 +72,13 @@ def create_point_marker(position, header):
 	
 	return marker
 
+def face_in_bbox(face, contour):
+	x1 = contour[0]
+	y1 = contour[1]
+	x2 = contour[0] + contour[2]
+	y2 = contour[1] + contour[3]
+	return (face[0] >= x1 and face[1] >= y1 and face[2] <= x2 and face[3] <= y2)
+
 class face_detection(Node):
 	def __init__(self):
 		super().__init__('face_detection')
@@ -81,6 +88,9 @@ class face_detection(Node):
 			parameters=[
 				('device', ''),
 		])
+
+		self.tf_buffer = Buffer()
+		self.tf_listener = TransformListener(self.tf_buffer, self)
 		
 		self.device = self.get_parameter('device').get_parameter_value().string_value
 		self.bridge = CvBridge()
@@ -110,6 +120,23 @@ class face_detection(Node):
 			print(e)
 			return
 
+		# code for monaLisa bounding box detection - to later determine if face is Monalisa 
+		edge_img = img.copy()
+		hsv_image = cv2.cvtColor(edge_img, cv2.COLOR_BGR2HSV)
+		edge_img[hsv_image[:,:,1] < 200] = (255,255,255)
+		edge_img[(hsv_image[:,:,0] > 30) & (hsv_image[:,:,0] < 220)] = (255,255,255)
+		gray = 255 - cv2.cvtColor(edge_img, cv2.COLOR_BGR2GRAY)
+	
+		#dilate	
+		dil_mat = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+		gray = cv2.erode(gray, dil_mat)
+		
+		contours_tupled, _ = cv2.findContours(image=gray, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
+
+		contours_mona = []
+		for c in contours_tupled:
+			contours_mona.append(cv2.boundingRect(c))
+
 		faces = []
 		res = self.model.predict(img, imgsz=(256, 320), show=False, verbose=False, classes=[0], device=self.device)
 		for x in res:
@@ -136,11 +163,12 @@ class face_detection(Node):
 			mask = cv2.rectangle(mask, (face[0], face[1]), (face[2], face[3]), 255, -1) 
 			mask[height_mask != 255] = 0
 
-			contours, hierarchy = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
+			contours, _ = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
 			if(len(contours) != 1):
 				continue
 		
 			x,y,w,h = cv2.boundingRect(contours[0])
+
 			p1 = pc_xyz[y,x]
 			p2 = pc_xyz[y,x+w-1]
 			p3 = pc_xyz[y+h-1,x]
@@ -184,12 +212,33 @@ class face_detection(Node):
 			finfo.normal_relative = normal.tolist()
 			finfo.yaw_relative = fi
 			finfo.quality = q_dist * q_angle * q_edges
+			finfo.position = self.relative_to_world_pos(p_center.tolist())
 			
+			finfo.is_mona = False
+			for c in contours_mona:
+				if(face_in_bbox(face, c)):
+					finfo.is_mona = True
+					break
+
 			self.data_pub.publish(finfo)
 
 		#cv2.imshow("Image", img)
 		#key = cv2.waitKey(1)
 		return	
+	
+	def relative_to_world_pos(self, position_relative):
+		p1 = PointStamped()
+		p1.header.frame_id = "/oakd_link"
+		p1.header.stamp = self.get_clock().now().to_msg()
+		p1.point = array2point(position_relative)
+
+		time_now = rclpy.time.Time()
+		timeout = Duration(seconds=10.0)
+		trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)
+
+		p1 = tfg.do_transform_point(p1, trans)
+
+		return [p1.point.x, p1.point.y, p1.point.z]
 
 def main():
 	rclpy.init(args=None)
