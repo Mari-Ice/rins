@@ -4,6 +4,7 @@ int16 height
 float64[] position_relative
 float64[] normal_relative
 float64 yaw_relative
+float64 yaw_global
 float64 quality
 bool is_mona
 float64[] position

@@ -73,10 +73,10 @@ def create_point_marker(position, header):
 	return marker
 
 def face_in_bbox(face, contour):
-	x1 = contour[0]
-	y1 = contour[1]
-	x2 = contour[0] + contour[2]
-	y2 = contour[1] + contour[3]
+	x1 = contour[0] - 20
+	y1 = contour[1] - 20
+	x2 = contour[0] + contour[2] + 20
+	y2 = contour[1] + contour[3] + 20
 	return (face[0] >= x1 and face[1] >= y1 and face[2] <= x2 and face[3] <= y2)
 
 class face_detection(Node):
@@ -89,9 +89,6 @@ class face_detection(Node):
 				('device', ''),
 		])
 
-		self.tf_buffer = Buffer()
-		self.tf_listener = TransformListener(self.tf_buffer, self)
-		
 		self.device = self.get_parameter('device').get_parameter_value().string_value
 		self.bridge = CvBridge()
 
@@ -212,7 +209,6 @@ class face_detection(Node):
 			finfo.normal_relative = normal.tolist()
 			finfo.yaw_relative = fi
 			finfo.quality = q_dist * q_angle * q_edges
-			finfo.position = self.relative_to_world_pos(p_center.tolist())
 			
 			finfo.is_mona = False
 			for c in contours_mona:
@@ -226,20 +222,6 @@ class face_detection(Node):
 		#key = cv2.waitKey(1)
 		return	
 	
-	def relative_to_world_pos(self, position_relative):
-		p1 = PointStamped()
-		p1.header.frame_id = "/oakd_link"
-		p1.header.stamp = self.get_clock().now().to_msg()
-		p1.point = array2point(position_relative)
-
-		time_now = rclpy.time.Time()
-		timeout = Duration(seconds=10.0)
-		trans = self.tf_buffer.lookup_transform("map", "oakd_link", time_now, timeout)
-
-		p1 = tfg.do_transform_point(p1, trans)
-
-		return [p1.point.x, p1.point.y, p1.point.z]
-
 def main():
 	rclpy.init(args=None)
 	node = face_detection()

@@ -125,6 +125,31 @@ def compare_faces(face1, face2):
 	cosfi = face1.normal.dot(face2.normal)
 	return (dist < 0.65) and (cosfi > -0.25)
 
+def clamp(x, minx, maxx):
+	return min(max(x, minx), maxx)
+def deg2rad(deg):
+	return (deg/180.0) * math.pi
+def pos_angle(rad):
+	while(rad > 2*math.pi):
+		rad -= 2*math.pi
+	while(rad < 0):
+		rad += 2*math.pi
+	return rad
+
+def sharp_angle(alpha, beta):
+	alpha = pos_angle(alpha)
+	beta = pos_angle(beta)
+	direction = 1
+
+	if(alpha < beta):
+		direction = alpha
+		alpha = beta
+		beta = direction
+		direction = -1
+	
+	if(beta+math.pi >= alpha):
+		return direction * (alpha - beta)
+	return direction * (alpha + beta - 2*math.pi)
 
 class MasterNode(Node):
 	def __init__(self):
@@ -133,16 +158,17 @@ class MasterNode(Node):
 		self.sm = MasterStateMachine(self)
 		self.tf_buffer = Buffer()
 		self.tf_listener = TransformListener(self.tf_buffer, self)
+		
+		self.inited = False
+		self.timer1 = self.create_timer(3, self.init2)
 
-		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
-		self.time = rclpy.time.Time() #T0
+		print("OK")
+		return
 
-		self.go_to_person = False
-		self.talk_future = None
-
-		self.go_to_mona = False
-
-		self.potential_parking_spots = None
+	def init2(self):
+		if(self.inited):
+			return
+		self.inited = True
 		self.park_sub = self.create_subscription(Park, '/park_near_obj', self.parking_info_callback, QoSReliabilityPolicy.BEST_EFFORT)
 		self.parking_stopped_sub = self.create_subscription(String, '/parking_stopped', self.parking_stopped_callback, QoSReliabilityPolicy.BEST_EFFORT)
 
@@ -167,11 +193,36 @@ class MasterNode(Node):
 		self.greet_srv = self.create_client(Trigger, '/say_hello')
 		self.read_qr_srv = self.create_client(Trigger, '/read_qr')
 
+		pwd = os.getcwd()
+		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
+		self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
+		self.timer = self.create_timer(0.1, self.on_update)
+		self.ring_quality_threshold = 0.3
+		self.person_quality_threshold = 0.1 # TODO: determine threshold
+		self.cylinder_threshold = 0.1 # TODO: determine threshold
+
+		self.t1 = millis()
+
+		self.ros_occupancy_grid = None
+		self.map_np = None
+		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
+		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
+
+		self.clock_sub = self.create_subscription(Clock, "/clock", self.clock_callback, qos_profile_sensor_data)
+		self.time = rclpy.time.Time() #T0
+
+		self.go_to_person = False
+		self.talk_future = None
+
+		self.go_to_mona = False
+
+		self.potential_parking_spots = None
+
 		self.last_person_seen = None
 		self.last_mona_seen = None
 
 		self.ring_position = {}
-
+		self.mona_quality_threshold = 0.1
 		self.exploration_active = False
 		self.parking_ring_position = [0,0]
 		self.parking_ring_found = False
@@ -188,31 +239,15 @@ class MasterNode(Node):
 		self.monas = []
 		self.last_cylinder = None
 		self.last_cylinder_dist = None
-		
 
-		self.timer = self.create_timer(0.1, self.on_update)
-		self.ring_quality_threshold = 0.3
-		self.person_quality_threshold = 0.1 # TODO: determine threshold
-		self.cylinder_threshold = 0.1 # TODO: determine threshold
-		self.t1 = millis()
-
-		self.ros_occupancy_grid = None
-		self.map_np = None
-		self.map_data = {"map_load_time":None, "resolution":None, "width":None, "height":None, "origin":None}
-		self.occupancy_grid_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile)
-
-		pwd = os.getcwd()
-		gpath = pwd[0:len(pwd.lower().split("rins")[0])+4]
-		self.costmap = cv2.cvtColor(cv2.imread(f"{gpath}/src/dis_tutorial3/maps/costmap.pgm"), cv2.COLOR_BGR2GRAY)
-
-		print("OK")
 		return
+
 
 	def clock_callback(self, msg):
 		self.time = msg.clock
 		return
 
-	def relative_to_global(self, relative, link="rplidar_link"):
+	def relative_to_global(self, relative, link="oakd_link"):
 		time_now = rclpy.time.Time()
 		timeout = Duration(seconds=0.5)
 		transform = self.tf_buffer.lookup_transform("map", link, time_now, timeout)	
@@ -222,7 +257,7 @@ class MasterNode(Node):
 		position_point.header.stamp = self.get_clock().now().to_msg()
 		position_point.point = array2point(relative)
 		pp_global = tfg.do_transform_point(position_point, transform)
-		return [pp_global.point.x, pp_global.point.y, pp_global.point.z]
+		return np.array([pp_global.point.x, pp_global.point.y, pp_global.point.z])
 
 	def rotate_on_point(self, x, y):
 		cmd_msg = Twist()
@@ -230,20 +265,24 @@ class MasterNode(Node):
 		cmd_msg.angular.z = 1.8
 		self.teleop_pub.publish(cmd_msg)
 	
-	def create_nav2_goal_msg(self, x,y):
+	def create_nav2_goal_msg(self, x,y, yaw):
 		goal_pose = PoseStamped()
 		goal_pose.header.frame_id = 'map'
 		goal_pose.header.stamp = self.time
 		goal_pose.pose.position.x = float(x)
 		goal_pose.pose.position.y = float(y)
-		goal_pose.pose.orientation = Quaternion(x=0.,y=0.,z=0.,w=1.)
+
+		quat_tf = quaternion_from_euler(0, 0, yaw)
+		quat_msg = Quaternion(x=quat_tf[0], y=quat_tf[1], z=quat_tf[2], w=quat_tf[3]) # fo
+
+		goal_pose.pose.orientation = quat_msg
 		return goal_pose
 
-	def go_to_pose(self, x,y): #nav2
+	def go_to_pose(self, x,y, yaw = 0): #nav2
 		fixed_x, fixed_y = self.get_valid_close_position(x, y)
 		print(f"original: {x}, {y} -new-> {fixed_x}, {fixed_y}")
 		
-		pose = self.create_nav2_goal_msg(fixed_x,fixed_y)
+		pose = self.create_nav2_goal_msg(fixed_x,fixed_y, yaw)
 
 		while not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
 			self.get_logger().info("'NavigateToPose' action server not available, waiting...")
@@ -319,25 +358,6 @@ class MasterNode(Node):
 								 euler_from_quaternion(quat_list)[-1]]
 		return
 
-	def get_valid_close_position(self, ox,oy):
-		mx,my = self.world_to_map_pixel(ox,oy)
-
-		height, width = self.costmap.shape[:2]
-		pixel_locations = np.full((height, width, 2), 0, dtype=np.uint16)
-		for y in range(0, height):
-			for x in range(0, width):
-				pixel_locations[y][x] = [x,y]
-
-		mask1 = np.full((height, width), 0, dtype=np.uint8)
-		cv2.circle(mask1,(mx,my),10,255,-1)
-		mask1[self.costmap < 200] = 0
-		pts = pixel_locations[mask1==255]
-		if(len(pts) > 0):
-			center = random.choice(pts)
-			return self.map_pixel_to_world(center[0], center[1])
-		else:
-			return [ox,oy]
-
 	def on_update(self):
 		self.send_ring_markers()
 
@@ -401,7 +421,9 @@ class MasterNode(Node):
 				else:
 					self.disable_exploration()
 			# else: 
-			# 	self.t1 = m_time
+			# 	self.t1 = m_time 
+
+			
     
 
 		return
@@ -430,7 +452,6 @@ class MasterNode(Node):
 		color_names = ["red", "green", "blue", "black"]
 		print(f"Found new ring with color: {color_names[ring_info.color_index]}")
 		self.say_color(ring_info.color_index)
-
 		self.ring_position[color_names[ring_info.color_index]] = [ring_info.position[0], ring_info.position[1]]
 
 		return
@@ -601,7 +622,7 @@ class MasterNode(Node):
 
 		#XXX Tole je za tesk pariranja pod obroci drugih barv TO je treba ostranit
 		#ring_info.color_index = (ring_info.color_index + 1) % 4
-
+		ring_info.position = self.relative_to_global(np.array(ring_info.position_relative), "top_camera_link").tolist()
 		min_dist, min_index = argmin(self.rings, dist_normal_fcn, ring_info)
 		if(min_dist > 0.6): #TODO, threshold, glede na kvaliteto
 			self.add_new_ring(ring_info)	
@@ -675,6 +696,10 @@ class MasterNode(Node):
 	
 	def people_callback(self, face_info : FaceInfo):
 		# TODO: only go to non-mona-lisas during exploration and only go to mona-lisas during painting search
+		global_position = self.relative_to_global(face_info.position_relative)
+		global_normal = (self.relative_to_global(np.array(face_info.position_relative) + np.array(face_info.normal_relative)) - global_position)
+		face_info.position = global_position.tolist()
+		face_info.yaw_global = math.atan2(global_normal[1], global_normal[0])
 
 		if(not face_info.is_mona and self.sm.exploring.is_active):
 			min_dist, min_index = argmin(self.people, dist_normal_fcn, face_info)
@@ -702,13 +727,83 @@ class MasterNode(Node):
 	
 	def cylinder_callback(self, cylinder_info):
 		if(cylinder_info.quality > self.cylinder_threshold):
-			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative)
+			cylinder_info.position = self.relative_to_global(cylinder_info.position_relative).tolist()
 			self.cylinder_position = cylinder_info.position
 			self.last_cylinder_dist = np.linalg.norm(cylinder_info.position_relative)
 
 	def parking_stopped_callback(self, msg):
 		self.parking_ended()
+
+	def get_valid_close_position(self, ox,oy):
+		try:
+			mx,my = self.world_to_map_pixel(ox,oy)
+		except:	
+			return [ox,oy]
+
+		height, width = self.costmap.shape[:2]
+		pixel_locations = np.full((height, width, 2), 0, dtype=np.uint16)
+		for y in range(0, height):
+			for x in range(0, width):
+				pixel_locations[y][x] = [x,y]
+
+		mask1 = np.full((height, width), 0, dtype=np.uint8)
+		cv2.circle(mask1,(mx,my),10,255,-1)
+		mask1[self.costmap < 200] = 0
+		pts = np.array(pixel_locations[mask1==255])
+		if(len(pts) > 0):
+			#Find closest to ox,oy
+			norms = np.linalg.norm((pts - np.array([mx,my])), axis=1)
+			index_of_smallest_norm = np.argmin(norms)
+			center = pts[index_of_smallest_norm]
+			return self.map_pixel_to_world(center[0], center[1])
+		else:
+			return [ox,oy]
+
+	def rotate_to_target_loop(self, error_fcn_list):
+		error = None
+		for err_fcn in error_fcn_list:
+			e = err_fcn()
+			if(e != None):
+				error = e
+				break
+		if(error == None): #V tem primeru se lahko npr vrtis 
+			cmd_msg = Twist()
+			cmd_msg.angular.z = 1.8
+			cmd_msg.linear.x = 0.
+			self.teleop_pub.publish(cmd_msg)
+			return False
 		
+		# print(f"Rotate error: {error}")
+
+		if(abs(error) > deg2rad(4)):
+			self.rotate2target_t2 = millis()
+
+		if(millis() - self.rotate2target_t2 > 2000):
+			return True
+
+		kp = 1.0
+		
+		vel = error * kp
+		cmd_msg = Twist()
+		cmd_msg.angular.z = vel
+		cmd_msg.linear.x = 0.
+		self.teleop_pub.publish(cmd_msg)
+		return False	
+
+	def move_closer_to_img(self):
+		print("Moving closer")
+		fdata = self.face_clusters.get_last(self.face_index)	
+		error = min(465 - fdata[0].img_bounds_xyxy[3], fdata[0].img_bounds_xyxy[1] - 85)
+		if(error < 0):
+			return True
+	
+		print("Move err: ", error)
+		cmd_msg = Twist()
+		cmd_msg.angular.z = 0.
+		cmd_msg.linear.x = error * 0.001 + 0.01
+		self.teleop_pub.publish(cmd_msg)
+		return False
+
 			
 
 class MasterStateMachine(StateMachine):
@@ -793,7 +888,7 @@ class MasterStateMachine(StateMachine):
 
 	def on_move_to_person(self):
 		# waypoint = self.node.relative_to_world_pos(np.array(self.node.last_person_seen.position_relative) + 0.3 * np.array(self.node.last_person_seen.normal_relative))
-		self.node.go_to_pose(self.node.last_person_seen.position[0], self.node.last_person_seen.position[1])
+		self.node.go_to_pose(self.node.last_person_seen.position[0], self.node.last_person_seen.position[1], self.node.last_person_seen.yaw_global)
 
 	def on_exit_talking_to_person(self):
 		self.node.go_to_person = False
