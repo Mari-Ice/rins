@@ -217,11 +217,15 @@ class RingDetection(Node):
 					if(color_max == 0):
 						continue
 
-					color = (color / color_max)
-					hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
-					color_uint = (color*255)
-					color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
-					color_index = int(((hue + 60)%360) / 120)
+					try:
+						color = (color / color_max)
+						hue = (int(360 * rgb_to_hsv([color[2], color[1], color[0]])[0]) + 0) % 360
+						
+						color_uint = (color*255)
+						color_uint = [int(color_uint[0]), int(color_uint[1]), int(color_uint[2])]
+						color_index = int(((hue + 60)%360) / 120)
+					except:
+						continue
 
 				color_names = ["red", "green", "blue", "black"]
 				color_name = color_names[color_index]
