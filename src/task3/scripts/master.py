@@ -279,6 +279,7 @@ class MasterNode(Node):
 
 		# PCA stuff
 		self.fe = face_extractor.face_extractor()
+		cv2.namedWindow("ErrorMona", cv2.WINDOW_NORMAL)
 
 		print("OK")
 		return
@@ -313,7 +314,18 @@ class MasterNode(Node):
 		if(self.state == 4):
 			fdata = self.face_clusters.get_last(self.face_index)	
 			result = self.fe.find_anomalies(self.mona_imgs[0], np.array(fdata[0].img_bounds_xyxy))
-			#print(result.shape)
+			if(not result[0]): #Fuck
+				pass
+			else:
+				cv2.imshow("ErrorMona", result[1])
+				cv2.waitKey(1)
+				err = np.sum(result[1])
+				print("PCA err: ", err)
+				if(err > 1000):
+					print("FAKE")
+				else:
+					print("REAL")
+				pass		
 			self.state = 0
 
 		return 

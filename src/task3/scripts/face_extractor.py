@@ -151,7 +151,7 @@ class face_extractor():
 		# 	return 
 		if(min_index < 0):
 			print("Err too big", min_err)
-			return None
+			return [False, None]
 		
 		cv_image = cv2.rectangle(cv_image, (cbox[0], cbox[1]), (cbox[2], cbox[3]), (255,0,0), 2)
 		mona_img = masked[int(cbox[1]):int(cbox[3]), int(cbox[0]+3):int(cbox[2]-3)]
@@ -216,7 +216,7 @@ class face_extractor():
 		mona2 = cv2.warpPerspective(mona_img,pm,[self.m,self.n])
 		
 		mona2 = preprocess_img(mona2)
-		cv2.imshow("Mona2", mona2)
+		#cv2.imshow("Mona2", mona2)
 
 		mona2 = mona2.astype(np.float64) / 255
 		err = get_error(mona2, self.pca)
@@ -237,6 +237,6 @@ class face_extractor():
 		err[:,0:3] = 0
 		err[:,err.shape[1]-4:] = 0
 		
-		cv2.imshow("ErrorMona", err) 
-		key = cv2.waitKey(1)
-		return err
+		#cv2.imshow("ErrorMona", err) 
+		#key = cv2.waitKey(0)
+		return [True, err]
